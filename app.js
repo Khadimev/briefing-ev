@@ -43,9 +43,9 @@ function verbe(s, act) {
   return f ? f[1] : act.charAt(0).toLowerCase() + act.slice(1);
 }
 function phraseTache(s, t) {
-  let v = verbe(s, t.activite);
-  if (t.precision) v += (/\s(les|la|le|l'|l’|des|du|au|aux)\s/i.test(v + " ") && !/\s(sur|de|des|d'|d’|:)\s*$/i.test(v) ? " : " : " ") + t.precision.trim();
-  else v = v.replace(/\s*(sur|de|des|d'|d’|:|,)\s*$/i, "");
+  const titre = String(t.activite || "").trim();
+  const desc = String(t.precision || "").trim();
+  let v = desc ? titre.charAt(0).toLowerCase() + titre.slice(1) + " (" + desc.replace(/[.\s]+$/, "") + ")" : verbe(s, titre).replace(/\s*(sur|de|des|d'|d’|:|,)\s*$/i, "");
   if (t.pour) v += " (" + affNom(t.pour) + ")";
   return v;
 }
@@ -235,12 +235,10 @@ function addPanel(s, mode) {
   const jard = mode === "jardinier";
   if (U.add !== s.id) return `<button class="btn ghost ${jard ? "wide" : "small"}" style="margin-top:${jard ? 14 : 10}px" data-act="add" data-s="${s.id}">${jard ? "+ Ajouter un travail que j’ai fait" : "+ Ajouter une tâche"}</button>`;
   return `<div class="add">
-    <label class="lbl">Travail (choisis dans la liste, ou écris directement plus bas)</label>
-    <div class="chips">${actsFor(s).map(a => `<button class="chip" data-act="addAct" data-a="${h(a[0])}" aria-pressed="${U.addAct === a[0]}">${h(a[0])}</button>`).join("")}
-      <button class="chip" data-act="addAct" data-a="__autre" aria-pressed="${U.addAct === "__autre"}">Autre…</button></div>
-    ${U.addAct === "__autre" ? `<label class="lbl" for="addAutre">Nom du travail</label><input type="text" id="addAutre">` : ""}
-    <label class="lbl" for="addPrec">Ce qu’il faut faire, où, quoi exactement</label>
-    <input type="text" id="addPrec" placeholder="${jard ? "Ex. massifs devant la réception" : "Ex. les alamandas entre les deux portes"}">
+    <label class="lbl" for="addTitre">Travail</label>
+    <input type="text" id="addTitre" placeholder="Ex. Entretien, Arrosage, Désherbage">
+    <label class="lbl" for="addPrec">Description</label>
+    <textarea id="addPrec" placeholder="${jard ? "Ex. massifs devant la réception" : "Ex. désherber et biner les massifs entre les deux portes"}"></textarea>
     ${jard ? "" : `<label class="lbl" for="addPour">Pour qui</label><select id="addPour"><option value="">Tout le secteur</option>${s.jardiniers.map(n => `<option value="${h(n)}">${h(affNom(n))}</option>`).join("")}</select>`}
     <div class="row" style="margin-top:12px"><button class="btn primary small" data-act="addOk" data-s="${s.id}" data-m="${mode}">${jard ? "Enregistrer comme fait" : "Ajouter"}</button>
     <button class="btn ghost small" data-act="add" data-s="">Fermer</button></div></div>`;
@@ -401,24 +399,17 @@ document.addEventListener("click", async e => {
   }
   if (A === "ko") { U.ko = d.id || null; return render(); }
   if (A === "annuler") return queue("valider", Object.assign({}, S.taches[d.id], { statut: "à faire", fait_par: "", fait_le: "", remarque: "" }));
-  if (A === "add") { U.add = d.s || null; U.addAct = null; return render(); }
-  if (A === "addAct") {
-    const p = document.getElementById("addPrec"), keep = p ? p.value : "";
-    U.addAct = d.a; render();
-    const p2 = document.getElementById("addPrec"); if (p2) p2.value = keep;
-    return;
-  }
+  if (A === "add") { U.add = d.s || null; render(); const f = document.getElementById("addTitre"); if (f) f.focus(); return; }
   if (A === "addOk") {
-    const autre = document.getElementById("addAutre");
-    let act = U.addAct === "__autre" ? (autre ? autre.value.trim() : "") : U.addAct;
+    let act = (document.getElementById("addTitre").value || "").trim();
     let prec = (document.getElementById("addPrec").value || "").trim();
-    if (!act && prec) { act = prec.charAt(0).toUpperCase() + prec.slice(1); prec = ""; }
-    if (!act) return alert("Choisis un travail dans la liste, ou écris ce qu’il faut faire.");
+    if (!act && prec) { act = prec; prec = ""; }
+    if (!act) return alert("Écris le travail à faire.");
+    act = act.charAt(0).toUpperCase() + act.slice(1);
     if (d.m === "jardinier") {
-      U.add = null; U.addAct = null;
+      U.add = null;
       return queue("valider", nouvelleTache({ secteur: d.s, activite: act, precision: prec, statut: "fait", fait_par: S.moi[d.s] || "", fait_le: new Date().toISOString(), origine: "jardinier" }));
     }
-    U.addAct = null;
     return queue("programmer", nouvelleTache({ secteur: d.s, activite: act, precision: prec, pour: document.getElementById("addPour").value }));
   }
   if (A === "prio") { const t = Object.assign({}, S.taches[d.id]); t.priorite = !prio(t); return queue("programmer", t); }
