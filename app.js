@@ -235,11 +235,11 @@ function addPanel(s, mode) {
   const jard = mode === "jardinier";
   if (U.add !== s.id) return `<button class="btn ghost ${jard ? "wide" : "small"}" style="margin-top:${jard ? 14 : 10}px" data-act="add" data-s="${s.id}">${jard ? "+ Ajouter un travail que j’ai fait" : "+ Ajouter une tâche"}</button>`;
   return `<div class="add">
-    <label class="lbl">Travail</label>
+    <label class="lbl">Travail (choisis dans la liste, ou écris directement plus bas)</label>
     <div class="chips">${actsFor(s).map(a => `<button class="chip" data-act="addAct" data-a="${h(a[0])}" aria-pressed="${U.addAct === a[0]}">${h(a[0])}</button>`).join("")}
       <button class="chip" data-act="addAct" data-a="__autre" aria-pressed="${U.addAct === "__autre"}">Autre…</button></div>
     ${U.addAct === "__autre" ? `<label class="lbl" for="addAutre">Nom du travail</label><input type="text" id="addAutre">` : ""}
-    <label class="lbl" for="addPrec">Où, quoi exactement (facultatif)</label>
+    <label class="lbl" for="addPrec">Ce qu’il faut faire, où, quoi exactement</label>
     <input type="text" id="addPrec" placeholder="${jard ? "Ex. massifs devant la réception" : "Ex. les alamandas entre les deux portes"}">
     ${jard ? "" : `<label class="lbl" for="addPour">Pour qui</label><select id="addPour"><option value="">Tout le secteur</option>${s.jardiniers.map(n => `<option value="${h(n)}">${h(affNom(n))}</option>`).join("")}</select>`}
     <div class="row" style="margin-top:12px"><button class="btn primary small" data-act="addOk" data-s="${s.id}" data-m="${mode}">${jard ? "Enregistrer comme fait" : "Ajouter"}</button>
@@ -410,9 +410,10 @@ document.addEventListener("click", async e => {
   }
   if (A === "addOk") {
     const autre = document.getElementById("addAutre");
-    const act = U.addAct === "__autre" ? (autre ? autre.value.trim() : "") : U.addAct;
-    if (!act) return alert("Choisis d’abord le travail.");
-    const prec = (document.getElementById("addPrec").value || "").trim();
+    let act = U.addAct === "__autre" ? (autre ? autre.value.trim() : "") : U.addAct;
+    let prec = (document.getElementById("addPrec").value || "").trim();
+    if (!act && prec) { act = prec.charAt(0).toUpperCase() + prec.slice(1); prec = ""; }
+    if (!act) return alert("Choisis un travail dans la liste, ou écris ce qu’il faut faire.");
     if (d.m === "jardinier") {
       U.add = null; U.addAct = null;
       return queue("valider", nouvelleTache({ secteur: d.s, activite: act, precision: prec, statut: "fait", fait_par: S.moi[d.s] || "", fait_le: new Date().toISOString(), origine: "jardinier" }));
