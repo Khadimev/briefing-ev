@@ -278,7 +278,7 @@ function renderSuivi() {
   let html = dateTabs(false) + equipeTabs() + errBox();
   html += `<div class="card" style="margin-top:14px"><div class="row"><span class="big">${ok}/${tot}</span><span class="muted">tâches faites · ${U.equipe === "jardin" ? "Jardin" : "Golf"}</span></div>
     <div class="prog"><i style="width:${tot ? Math.round(ok / tot * 100) : 0}%"></i></div>
-    <p class="muted" style="margin:8px 0 0">Données reçues ${S.synchro ? quand(S.synchro) : "jamais"}. Un jardinier sans réseau envoie ses validations dès qu’il en retrouve.</p></div><div class="stack" style="margin-top:12px">`;
+    <p class="muted" style="margin:8px 0 0">Données reçues ${S.synchro ? quand(S.synchro) : "jamais"}. Un jardinier sans réseau envoie ses validations dès qu’il en retrouve. Pour un jardinier sans téléphone, choisis son nom sous la tâche et valide à sa place.</p></div><div class="stack" style="margin-top:12px">`;
   secs.forEach(s => {
     const l = tachesDe(s.id, U.date);
     if (!l.length) return;
@@ -289,7 +289,15 @@ function renderSuivi() {
       html += `<div class="tline" style="grid-template-columns:1fr"><div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : '<span class="badge">À faire</span>'}${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}
         <strong>${h(t.activite)}</strong>${t.precision ? " · " + h(t.precision) : ""}
         ${t.fait_par ? `<div class="who">${h(affNom(t.fait_par))}${t.fait_le ? ", " + quand(t.fait_le) : ""}</div>` : ""}
-        ${t.remarque ? `<div class="who">Remarque : ${h(t.remarque)}</div>` : ""}</div></div>`;
+        ${t.remarque ? `<div class="who">Remarque : ${h(t.remarque)}</div>` : ""}
+        ${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}
+        ${fait(t) || pasFait(t)
+          ? `<div class="row" style="margin-top:6px"><button class="btn ghost small" data-act="annuler" data-id="${t.id}">Modifier</button></div>`
+          : `<div class="row" style="margin-top:8px">
+              <select id="sp_${t.id}" aria-label="Jardinier" style="flex:1;width:auto;min-width:150px">${s.jardiniers.map(n => `<option value="${h(n)}" ${n === (t.pour || s.jardiniers[0]) ? "selected" : ""}>${h(affNom(n))}</option>`).join("")}</select>
+              <button class="btn primary small" data-act="sfait" data-id="${t.id}">Fait</button>
+              <button class="btn ghost small" data-act="spasfait" data-id="${t.id}">Pas fait</button></div>`}
+        </div></div>`;
     });
     html += `</div></div>`;
   });
@@ -396,6 +404,14 @@ document.addEventListener("click", async e => {
     const rq = document.getElementById("rq");
     t.remarque = A === "pasfait" && rq ? rq.value.trim() : "";
     U.ko = null; return queue("valider", t);
+  }
+  if (A === "sfait" || A === "spasfait") {
+    const t = Object.assign({}, S.taches[d.id]);
+    const sel = document.getElementById("sp_" + d.id);
+    let rq = "";
+    if (A === "spasfait") { rq = prompt("Pourquoi ce n’est pas fait ? (facultatif)", ""); if (rq === null) return; }
+    t.statut = A === "sfait" ? "fait" : "pas fait"; t.fait_par = sel ? sel.value : ""; t.fait_le = new Date().toISOString(); t.remarque = (rq || "").trim();
+    return queue("valider", t);
   }
   if (A === "ko") { U.ko = d.id || null; return render(); }
   if (A === "annuler") return queue("valider", Object.assign({}, S.taches[d.id], { statut: "à faire", fait_par: "", fait_le: "", remarque: "" }));
