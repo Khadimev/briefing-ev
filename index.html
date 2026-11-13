@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Briefing Espaces Verts</title>
+<meta name="theme-color" content="#2f6b2a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Briefing EV">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#f3f5f0; --surface:#ffffff; --surface2:#e8ede3; --fg:#1b2419; --muted:#5d6b58; --line:#d3dbcc;
+  --green:#2f6b2a; --green-ink:#ffffff; --green-soft:#dcebd6;
+  --clay:#b5532a; --clay-soft:#f6e3d9; --ok:#2f7d32; --ko:#b3261e; --ko-soft:#f9dedc; --wait:#fff1d1; --wait-ink:#7a5200;
+  --display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --body:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  color-scheme:light;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#121711; --surface:#1b221a; --surface2:#242d22; --fg:#e7eee3; --muted:#9fb099; --line:#33402f;
+  --green:#7cc46f; --green-ink:#0f1a0d; --green-soft:#253823; --clay:#e58a5f; --clay-soft:#3a2419;
+  --ok:#7cc46f; --ko:#f2877e; --ko-soft:#3d1f1c; --wait:#3b2f12; --wait-ink:#ffd27a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121711; --surface:#1b221a; --surface2:#242d22; --fg:#e7eee3; --muted:#9fb099; --line:#33402f;
+  --green:#7cc46f; --green-ink:#0f1a0d; --green-soft:#253823; --clay:#e58a5f; --clay-soft:#3a2419;
+  --ok:#7cc46f; --ko:#f2877e; --ko-soft:#3d1f1c; --wait:#3b2f12; --wait-ink:#ffd27a; color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:16px;line-height:1.45;-webkit-text-size-adjust:100%}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--green)}
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--green);color:var(--green-ink)}
+header.top .in{max-width:720px;margin:0 auto;padding:12px max(16px,env(safe-area-inset-left,0px));display:flex;align-items:center;gap:10px}
+header.top h1{font-family:var(--display);font-weight:700;font-size:24px;letter-spacing:.02em;margin:0;line-height:1;text-transform:uppercase}
+header.top .sub{font-size:12px;opacity:.85}
+.net{margin-left:auto;border:1px solid currentColor;border-radius:999px;padding:6px 10px;font:inherit;font-size:13px;color:inherit;background:transparent;cursor:pointer;white-space:nowrap}
+.net .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:6px;vertical-align:1px}
+.net.wait .dot{background:#ffd27a}.net.off .dot{background:#ff9d8f}
+.wrap{max-width:720px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-left,0px)) 120px}
+h2{font-family:var(--display);font-weight:600;font-size:21px;letter-spacing:.03em;margin:22px 0 10px;color:var(--muted);text-transform:uppercase}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px}
+.stack{display:grid;gap:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:999px;padding:8px 13px;font:inherit;font-size:14px;cursor:pointer;min-height:40px}
+.chip[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:var(--green-ink);font-weight:600}
+.seg{display:flex;background:var(--surface2);border-radius:12px;padding:4px;gap:4px;margin-top:14px}
+.seg button{flex:1;border:0;background:transparent;color:var(--fg);font:inherit;font-weight:600;padding:10px 6px;border-radius:9px;cursor:pointer;min-height:44px}
+.seg button[aria-pressed="true"]{background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.12);color:var(--green)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid var(--clay);outline-offset:2px}
+.btn{border:0;border-radius:10px;padding:12px 16px;font:inherit;font-weight:600;cursor:pointer;min-height:48px}
+.btn.primary{background:var(--green);color:var(--green-ink)}
+.btn.ghost{background:var(--surface2);color:var(--fg);border:1px solid var(--line)}
+.btn.clay{background:var(--clay);color:#fff}
+.btn.small{min-height:38px;padding:8px 12px;font-size:14px}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.wide{width:100%}
+.link{border:0;background:transparent;color:var(--green);font:inherit;font-size:13px;font-weight:600;cursor:pointer;padding:2px 4px}
+label.lbl{display:block;font-size:13px;font-weight:600;color:var(--muted);margin:10px 0 6px}
+input[type=text],input[type=date],select,textarea{width:100%;font:inherit;color:var(--fg);background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:11px}
+textarea{min-height:70px;resize:vertical}
+.notice{background:var(--clay-soft);border-radius:10px;padding:10px 12px;font-size:14px}
+.muted{color:var(--muted);font-size:14px}
+.sect{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.sect .name{font-family:var(--display);font-size:23px;font-weight:700;line-height:1.1}
+.sect .count{margin-left:auto;font-family:var(--display);font-size:20px;font-weight:700;color:var(--green)}
+.who{font-size:13px;color:var(--muted);margin-top:2px}
+.task{border-top:1px solid var(--line);padding:12px 0 4px;display:grid;gap:8px;margin-top:8px}
+.task .act{font-weight:600;font-size:17px}
+.badge{display:inline-block;font-size:12px;font-weight:600;border-radius:6px;padding:3px 7px;background:var(--surface2);color:var(--muted);margin-right:4px}
+.badge.prio{background:var(--clay);color:#fff}
+.badge.done{background:var(--green-soft);color:var(--ok)}
+.badge.ko{background:var(--ko-soft);color:var(--ko)}
+.badge.wait{background:var(--wait);color:var(--wait-ink)}
+.state{font-size:14px}
+.state.done{color:var(--ok);font-weight:600}.state.ko{color:var(--ko);font-weight:600}
+.tline{display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.icon{border:0;background:transparent;color:var(--muted);font-size:20px;cursor:pointer;padding:6px 8px;min-width:40px;min-height:40px;border-radius:8px}
+.icon[aria-pressed="true"]{color:var(--clay)}
+.add{margin-top:10px;padding:12px;border-radius:10px;background:var(--surface2)}
+.add .chips{max-height:220px;overflow:auto;padding:2px}
+.out{white-space:pre-wrap;font-size:17px;line-height:1.6;min-height:260px;background:var(--surface)}
+.big{font-family:var(--display);font-size:30px;font-weight:700;line-height:1}
+nav.bottom{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px);z-index:6}
+nav.bottom .in{max-width:720px;margin:0 auto;display:flex}
+nav.bottom button{flex:1;border:0;background:transparent;color:var(--muted);font:inherit;font-size:12px;font-weight:600;padding:8px 2px 10px;display:grid;justify-items:center;gap:3px;cursor:pointer;min-height:58px}
+nav.bottom button[aria-current="page"]{color:var(--green)}
+nav.bottom svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.login{max-width:440px;margin:40px auto 0;text-align:center}
+.login input{text-align:center;font-size:26px;letter-spacing:.15em;font-family:var(--display);font-weight:700}
+.prog{height:6px;border-radius:3px;background:var(--surface2);overflow:hidden;margin-top:8px}
+.prog i{display:block;height:100%;background:var(--green)}
+@media (prefers-reduced-motion:no-preference){.chip,.btn,.seg button{transition:background-color .15s,color .15s}}
+</style>
+</head>
+<body>
+<header class="top"><div class="in">
+  <div><h1>Briefing EV</h1><div class="sub" id="sub">Espaces Verts · Cap Skirring</div></div>
+  <button class="net" id="net" data-act="sync" hidden><span class="dot"></span><span id="netTxt"></span></button>
+</div></header>
+<main class="wrap" id="main"></main>
+<nav class="bottom" id="nav" hidden><div class="in" id="navIn"></div></nav>
+<script src="config.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
