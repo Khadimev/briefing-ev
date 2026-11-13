@@ -1,5 +1,5 @@
 /* Garde l'application dans le téléphone pour qu'elle s'ouvre sans Internet. */
-const CACHE = "briefing-ev-v2";
+const CACHE = "briefing-ev-v3";
 const FICHIERS = ["./", "index.html", "app.js", "data.js", "config.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FICHIERS)).then(() => self.skipWaiting()));
@@ -12,9 +12,9 @@ self.addEventListener("fetch", e => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.hostname.endsWith("google.com") || url.hostname.endsWith("googleusercontent.com")) return;
-  // Pages et fichiers de l'application : réseau d'abord (pour les mises à jour), sinon la copie du téléphone
+  // Pages et fichiers de l'application : toujours la dernière version en ligne, sinon la copie du téléphone
   if (url.origin === location.origin) {
-    e.respondWith(fetch(req).then(r => {
+    e.respondWith(fetch(req.url, { cache: "no-cache", credentials: "same-origin" }).then(r => {
       if (r.ok) { const c = r.clone(); caches.open(CACHE).then(x => x.put(req, c)); }
       return r;
     }).catch(() => caches.match(req, { ignoreSearch: true }).then(r => r || caches.match("index.html"))));
