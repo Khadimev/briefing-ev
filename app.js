@@ -8,10 +8,12 @@ const ls = {
 const S = {
   codes: ls.get("codes", []), role: ls.get("role", null), secteurs: ls.get("secteurs", []),
   taches: ls.get("taches", {}), outbox: ls.get("outbox", []), synchro: ls.get("synchro", null),
-  moi: ls.get("moi", {}), brief: ls.get("brief", {})
+  moi: ls.get("moi", {}), brief: ls.get("brief", {}),
+  ident: ls.get("ident", null), alertes: ls.get("alertes", []), appareil: ls.get("appareil", "")
 };
+if (!S.appareil) { S.appareil = "a" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); ls.set("appareil", S.appareil); }
 const save = (...k) => k.forEach(x => ls.set(x, S[x]));
-const U = { view: null, date: iso(new Date()), equipe: "jardin", sect: null, add: null, addAct: null, ko: null, err: "", busy: false, codeErr: "", installEvt: null };
+const U = { view: null, date: iso(new Date()), equipe: "jardin", sect: null, add: null, addAct: null, ko: null, err: "", busy: false, codeErr: "", installEvt: null, codes: null };
 const main = document.getElementById("main");
 
 /* ---------- outils ---------- */
@@ -35,6 +37,9 @@ function liste(a) { return a.length <= 1 ? (a[0] || "") : a.slice(0, -1).join(",
 const prio = t => t.priorite === true || t.priorite === "oui";
 const fait = t => t.statut === "fait";
 const pasFait = t => t.statut === "pas fait";
+const annule = t => t.statut === "annulé";
+const reporte = t => t.statut === "reporté";
+function conflitDe(t) { if (!t || !t.conflit) return null; try { return typeof t.conflit === "string" ? JSON.parse(t.conflit) : t.conflit; } catch (e) { return null; } }
 const enAttente = id => S.outbox.some(o => o.tache.id === id);
 const secteur = id => S.secteurs.find(s => s.id === id);
 const actsFor = s => (LIBS.ACTS[s.id] || LIBS.ACTS[s.equipe] || []);
@@ -50,22 +55,32 @@ function phraseTache(s, t) {
   return v;
 }
 function tachesDe(sid, date) {
-  return Object.values(S.taches).filter(t => t.secteur === sid && t.date === date)
+  return Object.values(S.taches).filter(t => t.secteur === sid && t.date === date && !annule(t))
     .sort((a, b) => (prio(b) - prio(a)) || String(a.id).localeCompare(String(b.id)));
 }
 
 /* ---------- synchronisation ---------- */
 let syncing = false, syncTimer = null;
-function queue(type, tache) {
-  S.outbox.push({ op: uid(), type, tache: Object.assign({}, tache) });
-  if (type === "supprimer") delete S.taches[tache.id]; else S.taches[tache.id] = tache;
+const enVol = new Set();
+function queue(type, tache, extra) {
+  const prev = S.taches[tache.id];
+  const o = Object.assign({ op: uid(), type, tache: Object.assign({}, tache), cree: Date.now() }, extra || {});
+  if (type === "valider" && o.base_statut === undefined) o.base_statut = prev ? (prev.statut || "à faire") : "à faire";
+  if (type === "valider") {
+    // Une seule validation en attente par tâche : évite les doubles validations.
+    const j = S.outbox.findIndex(x => x.type === "valider" && x.tache.id === tache.id && !enVol.has(x.op));
+    if (j >= 0) { o.base_statut = S.outbox[j].base_statut; o.cree = S.outbox[j].cree; S.outbox.splice(j, 1); }
+  }
+  S.outbox.push(o);
+  if (type === "supprimer") { if (prev) S.taches[tache.id] = Object.assign({}, prev, { statut: "annulé" }); }
+  else S.taches[tache.id] = tache;
   save("outbox", "taches"); render();
   clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800);
 }
 async function api(body) {
   const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 30000);
   try {
-    const r = await fetch(API_URL, { method: "POST", body: JSON.stringify(body), signal: ctl.signal });
+    const r = await fetch(API_URL, { method: "POST", body: JSON.stringify(Object.assign({ v: 2, appareil: S.appareil }, body)), signal: ctl.signal });
     return await r.json();
   } finally { clearTimeout(tm); }
 }
@@ -73,24 +88,41 @@ async function sync() {
   if (!S.codes.length || syncing || !/^https:\/\//.test(API_URL)) return;
   if (!navigator.onLine) { status(); return; }
   syncing = true; status();
+  let recus = new Set();
   try {
     const ops = S.outbox.slice(0, 150);
+    ops.forEach(o => enVol.add(o.op));
     const r = await api({ action: "synchro", codes: S.codes, ops });
-    if (!r.ok) throw new Error(r.erreur === "Code inconnu" ? "Ton code n’est plus valable. Demande le nouveau code à ton responsable, puis entre-le dans Réglages." : r.erreur);
-    const recus = new Set(r.recus || []);
+    if (!r.ok) throw new Error(messageErreur(r.erreur, true));
+    recus = new Set(r.resultats ? r.resultats.map(x => x.op) : (r.recus || []));
+    (r.resultats || []).forEach(x => {
+      if (x.etat === "ok") return;
+      const o = S.outbox.find(y => y.op === x.op);
+      const t = o && (S.taches[o.tache.id] || o.tache);
+      const nom = t && t.activite ? "« " + t.activite + " »" : "Une tâche";
+      S.alertes.push({ le: new Date().toISOString(), texte: x.etat === "conflit"
+        ? nom + " : " + x.raison + ". Les deux informations sont gardées, à vérifier dans le Suivi."
+        : nom + " n’a pas été enregistrée : " + x.raison + "." });
+    });
+    S.alertes = S.alertes.slice(-20);
     S.outbox = S.outbox.filter(o => !recus.has(o.op));
     const n = {};
     (r.taches || []).forEach(t => { n[t.id] = t; });
-    S.outbox.forEach(o => { if (o.type === "supprimer") delete n[o.tache.id]; else if (S.taches[o.tache.id]) n[o.tache.id] = S.taches[o.tache.id]; });
+    S.outbox.forEach(o => {
+      if (o.type === "supprimer") { if (n[o.tache.id]) n[o.tache.id] = Object.assign({}, n[o.tache.id], { statut: "annulé" }); }
+      else if (S.taches[o.tache.id]) n[o.tache.id] = S.taches[o.tache.id];
+    });
     S.taches = n; S.secteurs = r.secteurs || S.secteurs; S.role = r.role || S.role; S.synchro = r.heure;
+    if (r.moi) S.ident = r.moi;
     U.err = "";
-    save("outbox", "taches", "secteurs", "role", "synchro");
-    if (S.outbox.length && recus.size) { syncing = false; return sync(); }
+    save("outbox", "taches", "secteurs", "role", "synchro", "ident", "alertes");
   } catch (e) {
     U.err = e.name === "AbortError" ? "Réseau trop lent : les validations restent dans le téléphone et partiront plus tard." :
       (e instanceof TypeError ? "Pas de réseau pour le moment : les validations partiront plus tard." : e.message);
   }
+  enVol.clear();
   syncing = false;
+  if (!U.err && S.outbox.length && recus.size) return sync();
   const a = document.activeElement;
   if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && main.contains(a)) status(); else render();
 }
@@ -105,6 +137,12 @@ function status() {
   else if (U.err) { t.textContent = "À réessayer"; b.classList.add("wait"); }
   else { t.textContent = S.synchro ? "À jour " + heure(S.synchro) : "À jour"; }
 }
+function messageErreur(err, deja) {
+  if (err === "Code inconnu") return deja ? "Ton code n’est plus valable. Demande le nouveau code à ton responsable, puis entre-le dans Réglages." : "Ce code n’existe pas. Vérifie-le avec ton responsable.";
+  if (err === "Trop d’essais") return "Trop d’essais de codes incorrects sur l’application. Par sécurité, réessaie dans 15 minutes.";
+  return err || "Erreur du serveur.";
+}
+function demanderPersistance() { try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {} }
 window.addEventListener("online", () => { status(); sync(); });
 window.addEventListener("offline", status);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sync(); });
@@ -119,12 +157,14 @@ async function connexion(code) {
   U.busy = true; U.codeErr = ""; render();
   try {
     const r = await api({ action: "connexion", code });
-    if (!r.ok) throw new Error(r.erreur === "Code inconnu" ? "Ce code n’existe pas. Vérifie-le avec ton responsable." : r.erreur);
+    if (!r.ok) throw new Error(messageErreur(r.erreur, false));
     if (!S.codes.map(c => c.toUpperCase()).includes(code.toUpperCase())) S.codes.push(code);
     const nouveaux = r.secteurs.filter(x => !S.secteurs.some(y => y.id === x.id));
     S.role = r.role === "admin" || S.role === "admin" ? "admin" : "secteur";
     S.secteurs = S.role === "admin" && r.role === "admin" ? r.secteurs : S.secteurs.concat(nouveaux);
-    save("codes", "role", "secteurs");
+    if (r.moi && (r.role === "admin" || !S.ident)) S.ident = r.moi;
+    save("codes", "role", "secteurs", "ident");
+    demanderPersistance();
     U.view = S.role === "admin" ? "programme" : "taches";
     if (nouveaux.length && S.role !== "admin") U.sect = nouveaux[0].id;
     U.busy = false; render(); sync();
@@ -137,8 +177,8 @@ async function connexion(code) {
 function deconnexion() {
   const msg = S.outbox.length ? S.outbox.length + " validation(s) ne sont pas encore envoyées et seront perdues. Te déconnecter quand même ?" : "Te déconnecter de ce téléphone ?";
   if (!confirm(msg)) return;
-  ["codes", "role", "secteurs", "taches", "outbox", "synchro"].forEach(k => { try { localStorage.removeItem(K + k); } catch (e) {} });
-  S.codes = []; S.role = null; S.secteurs = []; S.taches = {}; S.outbox = []; S.synchro = null;
+  ["codes", "role", "secteurs", "taches", "outbox", "synchro", "ident", "alertes"].forEach(k => { try { localStorage.removeItem(K + k); } catch (e) {} });
+  S.codes = []; S.role = null; S.secteurs = []; S.taches = {}; S.outbox = []; S.synchro = null; S.ident = null; S.alertes = []; U.codes = null;
   U.view = null; U.sect = null; render();
 }
 
@@ -163,7 +203,7 @@ function render() {
   if (!S.codes.length) { status(); nav(); document.getElementById("sub").textContent = "Espaces Verts · Cap Skirring"; return renderLogin(); }
   if (!U.view || (S.role !== "admin" && !["taches", "reglages"].includes(U.view))) U.view = S.role === "admin" ? "programme" : "taches";
   status(); nav();
-  document.getElementById("sub").textContent = S.role === "admin" ? "Espace responsable" : "Espaces Verts · Cap Skirring";
+  document.getElementById("sub").textContent = S.role === "admin" ? "Espace responsable" + (S.ident && S.ident.nom ? " · " + affNom(S.ident.nom) : "") : "Espaces Verts · Cap Skirring";
   ({ taches: renderTaches, programme: renderProgramme, suivi: renderSuivi, briefing: renderBriefing, reglages: renderReglages })[U.view]();
 }
 function dateTabs(withPicker) {
@@ -176,12 +216,27 @@ function dateTabs(withPicker) {
 function equipeTabs() {
   return `<div class="seg" role="group" aria-label="Équipe">${[["jardin", "Jardin"], ["golf", "Golf"]].map(([k, l]) => `<button data-act="equipe" data-e="${k}" aria-pressed="${U.equipe === k}">${l}</button>`).join("")}</div>`;
 }
-function errBox() { return U.err ? `<div class="notice" style="margin-top:12px">${h(U.err)}</div>` : ""; }
+function errBox() {
+  let s = U.err ? `<div class="notice" style="margin-top:12px">${h(U.err)}</div>` : "";
+  const n = S.outbox.length;
+  if (n) {
+    const vieux = Math.min.apply(null, S.outbox.map(o => o.cree || Date.now()));
+    const longtemps = Date.now() - vieux >= 24 * 3600000;
+    s += `<div class="notice" style="margin-top:12px${longtemps ? ";border:2px solid var(--clay)" : ""}"><strong>${n} ${n > 1 ? "envois" : "envoi"} en attente.</strong>
+      ${longtemps ? "Certains attendent depuis plus de 24 h : connecte ce téléphone à Internet dès que possible." : "Ils partiront dès que le réseau revient. Rien n’est perdu."}
+      <div class="row" style="margin-top:8px"><button class="btn primary small" data-act="sync" ${syncing ? "disabled" : ""}>${syncing ? "Envoi…" : "Synchroniser maintenant"}</button></div></div>`;
+  }
+  if (S.alertes.length) {
+    s += `<div class="notice" style="margin-top:12px"><strong>À savoir</strong>${S.alertes.map(a => `<div style="margin-top:6px">${h(a.texte)}</div>`).join("")}
+      <div class="row" style="margin-top:8px"><button class="btn ghost small" data-act="alertesOk">J’ai compris</button></div></div>`;
+  }
+  return s;
+}
 
 function renderLogin() {
   main.innerHTML = `<div class="login">
     <p class="big" style="margin:0 0 6px">Bienvenue</p>
-    <p class="muted">Entre le code de ton secteur. Le responsable entre son code administrateur.</p>
+    <p class="muted">Entre le code de ton secteur. Le responsable et les chefs d’équipe entrent leur code personnel.</p>
     <input type="text" id="code" autocomplete="off" autocapitalize="characters" aria-label="Code" placeholder="Code" style="margin:14px 0">
     <button class="btn primary wide" data-act="login" ${U.busy ? "disabled" : ""}>${U.busy ? "Vérification…" : "Entrer"}</button>
     ${U.codeErr ? `<div class="notice" style="margin-top:14px;text-align:left">${h(U.codeErr)}</div>` : ""}
@@ -210,11 +265,13 @@ function renderTaches() {
   if (!list.length) html += `<p class="muted" style="margin-bottom:0">${S.synchro ? "Aucune tâche programmée pour ce jour." : "Les tâches arriveront dès que le téléphone aura du réseau."}</p>`;
   list.forEach(t => {
     html += `<div class="task">
-      ${prio(t) || t.origine === "jardinier" || enAttente(t.id) ? `<div>${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">En attente d’envoi</span>' : ""}</div>` : ""}
+      ${prio(t) || t.origine === "jardinier" || enAttente(t.id) || t.conflit ? `<div>${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">En attente d’envoi</span>' : ""}${t.conflit ? '<span class="badge ko">Vérification par le responsable</span>' : ""}</div>` : ""}
       <div class="act">${h(t.activite)}</div>
       ${t.precision ? `<div>${h(t.precision)}</div>` : ""}
       ${t.pour ? `<div class="who">Pour : ${h(affNom(t.pour))}</div>` : ""}`;
-    if (fait(t) || pasFait(t)) {
+    if (reporte(t)) {
+      html += `<div class="row"><span class="state">↷ Reportée à un autre jour</span></div>`;
+    } else if (fait(t) || pasFait(t)) {
       html += `<div class="row"><span class="state ${fait(t) ? "done" : "ko"}">${fait(t) ? "✓ Fait" : "✗ Pas fait"}${t.fait_par ? " par " + h(affNom(t.fait_par)) : ""}${t.fait_le ? ", " + quand(t.fait_le) : ""}</span>
         <button class="btn ghost small" data-act="annuler" data-id="${t.id}" ${moi ? "" : "disabled"}>Modifier</button></div>
         ${t.remarque ? `<div class="muted">Remarque : ${h(t.remarque)}</div>` : ""}`;
@@ -245,10 +302,11 @@ function addPanel(s, mode) {
 }
 
 /* ----- Responsable : programme ----- */
+const aReprendre = t => !fait(t) && !reporte(t) && !t.reporte_vers && t.origine !== "jardinier";
 function renderProgramme() {
   const secs = S.secteurs.filter(s => s.equipe === U.equipe);
   const hier = shift(U.date, -1);
-  const reste = secs.reduce((n, s) => n + tachesDe(s.id, hier).filter(t => !fait(t)).length, 0);
+  const reste = secs.reduce((n, s) => n + tachesDe(s.id, hier).filter(aReprendre).length, 0);
   let html = dateTabs(true) + equipeTabs() + errBox();
   html += `<div class="row" style="margin-top:12px">
     <button class="btn ghost small" data-act="reprendre" ${reste ? "" : "disabled"}>Reprendre ${reste ? "les " + reste + " tâches" : "les tâches"} non faites la veille</button>
@@ -261,7 +319,7 @@ function renderProgramme() {
       ${s.missions ? `<div class="who">${h(s.missions)}</div>` : ""}<div style="margin-top:6px">`;
     list.forEach(t => {
       html += `<div class="tline"><div><strong>${h(t.activite)}</strong>${t.precision ? " · " + h(t.precision) : ""}${t.pour ? `<div class="who">Pour ${h(affNom(t.pour))}</div>` : ""}
-        <div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}</div></div>
+        <div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : reporte(t) ? '<span class="badge">Reporté</span>' : ""}${t.conflit ? '<span class="badge ko">À vérifier</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}</div></div>
         <button class="icon" data-act="prio" data-id="${t.id}" aria-pressed="${prio(t)}" aria-label="Priorité" title="Priorité">★</button>
         <button class="icon" data-act="suppr" data-id="${t.id}" aria-label="Supprimer" title="Supprimer">✕</button></div>`;
     });
@@ -286,12 +344,16 @@ function renderSuivi() {
     html += `<div class="card"><div class="sect"><span class="name">${h(s.nom)}</span><span class="count">${l.filter(fait).length}/${l.length}</span></div>
       <div class="who">${last ? "Dernière validation " + quand(last) : "Aucune validation reçue"}</div><div style="margin-top:6px">`;
     l.forEach(t => {
-      html += `<div class="tline" style="grid-template-columns:1fr"><div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : '<span class="badge">À faire</span>'}${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}
+      const c = conflitDe(t);
+      html += `<div class="tline" style="grid-template-columns:1fr"><div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : reporte(t) ? '<span class="badge">Reporté</span>' : '<span class="badge">À faire</span>'}${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}
         <strong>${h(t.activite)}</strong>${t.precision ? " · " + h(t.precision) : ""}
         ${t.fait_par ? `<div class="who">${h(affNom(t.fait_par))}${t.fait_le ? ", " + quand(t.fait_le) : ""}</div>` : ""}
+        ${(fait(t) || pasFait(t)) && t.valide_par && t.valide_fonction && t.valide_fonction !== "Jardinier" ? `<div class="who">Validé par ${h(affNom(t.valide_par))} (${h(t.valide_fonction)})${t.valide_le ? ", " + quand(t.valide_le) : ""}</div>` : ""}
         ${t.remarque ? `<div class="who">Remarque : ${h(t.remarque)}</div>` : ""}
         ${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}
-        ${fait(t) || pasFait(t)
+        ${c ? `<div class="notice" style="margin-top:6px"><strong>À vérifier :</strong> une autre information est arrivée pour cette tâche : « ${h(c.statut)} »${c.fait_par ? " par " + h(affNom(c.fait_par)) : ""}${c.remarque ? " (" + h(c.remarque) + ")" : ""}, envoyée${c.par ? " par " + h(affNom(c.par)) : ""}${c.le ? " " + quand(c.le) : ""}.
+          <div class="row" style="margin-top:8px"><button class="btn ghost small" data-act="garder" data-c="actuel" data-id="${t.id}">Garder « ${h(t.statut)} »</button><button class="btn ghost small" data-act="garder" data-c="autre" data-id="${t.id}">Garder « ${h(c.statut)} »</button></div></div>` : ""}
+        ${reporte(t) ? "" : fait(t) || pasFait(t)
           ? `<div class="row" style="margin-top:6px"><button class="btn ghost small" data-act="annuler" data-id="${t.id}">Modifier</button></div>`
           : `<div class="row" style="margin-top:8px">
               <select id="sp_${t.id}" aria-label="Jardinier" style="flex:1;width:auto;min-width:150px">${s.jardiniers.map(n => `<option value="${h(n)}" ${n === (t.pour || s.jardiniers[0]) ? "selected" : ""}>${h(affNom(n))}</option>`).join("")}</select>
@@ -362,11 +424,13 @@ function renderReglages() {
   html += `<h2>Envoi des données</h2><div class="card"><p style="margin-top:0">${S.outbox.length ? S.outbox.length + " élément(s) en attente d’envoi." : "Tout est envoyé."}<br><span class="muted">Dernière mise à jour : ${S.synchro ? quand(S.synchro) : "jamais"}.</span></p>
     <button class="btn primary small" data-act="sync" ${navigator.onLine ? "" : "disabled"}>${navigator.onLine ? "Synchroniser maintenant" : "Pas de réseau"}</button></div>`;
   if (S.role === "admin") {
-    html += `<h2>Codes des secteurs</h2><div class="card"><p class="muted" style="margin-top:0">Donne à chaque jardinier l’adresse de l’application et le code de son secteur. Ton code administrateur et les codes des chefs d’équipe se changent dans l’onglet Config du Google Sheet.</p>`;
+    if (S.ident && S.ident.nom) html += `<h2>Connecté</h2><div class="card"><strong>${h(affNom(S.ident.nom))}</strong><div class="who">${h(S.ident.fonction || "")}</div></div>`;
+    html += `<h2>Codes des secteurs</h2><div class="card"><p class="muted" style="margin-top:0">Donne à chaque jardinier l’adresse de l’application et le code de son secteur. Les codes personnels du responsable et des chefs d’équipe sont dans l’onglet Utilisateurs du Google Sheet.</p>
+      ${U.codes ? "" : `<p class="muted">${navigator.onLine ? "Chargement des codes…" : "Les codes s’affichent quand le téléphone a du réseau."}</p>`}`;
     ["jardin", "golf"].forEach(eq => {
       html += `<label class="lbl">${eq === "jardin" ? "Jardin" : "Golf"}</label>`;
       S.secteurs.filter(s => s.equipe === eq).forEach(s => {
-        html += `<div class="tline"><div>${h(s.nom)}</div><strong style="font-family:var(--display);font-size:20px;letter-spacing:.08em">${h(s.code || "")}</strong>
+        html += `<div class="tline"><div>${h(s.nom)}</div><strong style="font-family:var(--display);font-size:20px;letter-spacing:.08em">${h(U.codes ? (U.codes[s.id] || "") : (s.code || ""))}</strong>
           <button class="btn ghost small" data-act="code" data-s="${s.id}" ${navigator.onLine ? "" : "disabled"}>Changer</button></div>`;
       });
     });
@@ -393,7 +457,14 @@ document.addEventListener("click", async e => {
   if (A === "login") return connexion(document.getElementById("code").value);
   if (A === "login2") { const v = document.getElementById("code2").value; U.view = "reglages"; await connexion(v); if (!U.codeErr) { U.view = "taches"; render(); } return; }
   if (A === "sync") { U.err = ""; return sync(); }
-  if (A === "view") { U.view = d.v; U.add = null; U.ko = null; U.codeErr = ""; window.scrollTo(0, 0); return render(); }
+  if (A === "view") { U.view = d.v; U.add = null; U.ko = null; U.codeErr = ""; window.scrollTo(0, 0); render(); if (d.v === "reglages" && S.role === "admin") chargerCodes(); return; }
+  if (A === "alertesOk") { S.alertes = []; save("alertes"); return render(); }
+  if (A === "garder") {
+    const t = S.taches[d.id], c = conflitDe(t); if (!t) return;
+    const n = Object.assign({}, t, { conflit: "" });
+    if (d.c === "autre" && c) Object.assign(n, { statut: c.statut, fait_par: c.fait_par, fait_le: c.fait_le, remarque: c.remarque });
+    return queue("resoudre", n, { choix: d.c === "autre" ? "autre" : "actuel" });
+  }
   if (A === "date") { U.date = d.d; U.add = null; U.ko = null; return render(); }
   if (A === "equipe") { U.equipe = d.e; U.add = null; return render(); }
   if (A === "sect") { U.sect = d.s; U.add = null; U.ko = null; return render(); }
@@ -434,9 +505,12 @@ document.addEventListener("click", async e => {
     const hier = shift(U.date, -1); let n = 0;
     S.secteurs.filter(s => s.equipe === U.equipe).forEach(s => {
       const deja = tachesDe(s.id, U.date);
-      tachesDe(s.id, hier).filter(t => (A === "copier" ? t.origine !== "jardinier" : !fait(t))).forEach(t => {
-        if (deja.some(x => x.activite === t.activite && x.precision === t.precision)) return;
-        n++; queue("programmer", nouvelleTache({ secteur: s.id, activite: t.activite, precision: t.precision, pour: t.pour, priorite: prio(t) }));
+      tachesDe(s.id, hier).filter(t => (A === "copier" ? t.origine !== "jardinier" : aReprendre(t))).forEach(t => {
+        // Identifiant fixe : si deux responsables reprennent en même temps, la tâche n’est créée qu’une fois.
+        const nid = (A === "reprendre" ? "r_" : "c_") + t.id + "_" + U.date;
+        if (S.taches[nid] || deja.some(x => x.activite === t.activite && x.precision === t.precision)) return;
+        if (A === "reprendre") S.taches[t.id] = Object.assign({}, t, { reporte_vers: nid }, t.statut === "à faire" || !t.statut ? { statut: "reporté" } : {});
+        n++; queue("programmer", nouvelleTache(Object.assign({ id: nid, secteur: s.id, activite: t.activite, precision: t.precision, pour: t.pour, priorite: prio(t) }, A === "reprendre" ? { report_de: t.id } : {})));
       });
     });
     if (!n) alert("Rien à ajouter : ces tâches sont déjà au programme.");
@@ -457,11 +531,13 @@ document.addEventListener("click", async e => {
   }
   if (A === "bread") { const u = new SpeechSynthesisUtterance(document.getElementById("btxt").value); u.lang = "fr-FR"; speechSynthesis.cancel(); speechSynthesis.speak(u); return; }
   if (A === "code") {
-    const s = secteur(d.s); const n = prompt("Nouveau code pour « " + s.nom + " » (4 caractères minimum) :", ""); if (!n) return;
+    const s = secteur(d.s); const n = prompt("Nouveau code pour « " + s.nom + " » (6 chiffres ou plus) :", ""); if (!n) return;
     try {
-      const r = await api({ action: "changerCode", codes: S.codes, secteur: s.id, nouveau: n });
+      const r = await api({ action: "changerCode", codes: S.codes, secteur: s.id, nouveau: n.trim() });
       if (!r.ok) return alert(r.erreur);
-      S.secteurs = r.secteurs; save("secteurs"); render();
+      if (r.codes) { U.codes = {}; r.codes.forEach(x => U.codes[x.id] = x.code); }
+      if (r.secteurs) { S.secteurs = r.secteurs; save("secteurs"); }
+      render();
       alert("Code changé. Donne le nouveau code aux jardiniers de ce secteur.");
     } catch (er) { alert("Changement impossible : vérifie le réseau."); }
     return;
@@ -479,5 +555,14 @@ document.addEventListener("keydown", e => {
 });
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); U.installEvt = e; if (U.view === "reglages") render(); });
 
+async function chargerCodes() {
+  if (!navigator.onLine || S.role !== "admin") return;
+  try {
+    const r = await api({ action: "codes", codes: S.codes });
+    if (r.ok && r.codes) { U.codes = {}; r.codes.forEach(x => U.codes[x.id] = x.code); if (U.view === "reglages") render(); }
+  } catch (e) {}
+}
+
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if (S.codes.length) demanderPersistance();
 render(); sync();
