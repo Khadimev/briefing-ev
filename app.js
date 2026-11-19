@@ -344,7 +344,7 @@ function renderProgramme() {
     list.forEach(t => {
       html += `<div class="tline"><div><strong>${h(t.activite)}</strong>${t.precision ? " · " + h(t.precision) : ""}${t.pour ? `<div class="who">Pour ${h(affNom(t.pour))}</div>` : ""}
         <div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : reporte(t) ? '<span class="badge">Reporté</span>' : ""}${t.conflit ? '<span class="badge ko">À vérifier</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}</div>
-        ${phBloc(t, false)}${photosDe(t).length < PHOTOS_MAX ? `<button class="link" style="padding-left:0" data-act="photo" data-id="${t.id}">📷 Ajouter une photo${photosDe(t).length ? " (" + photosDe(t).length + "/" + PHOTOS_MAX + ")" : ""}</button>` : `<div class="who">${PHOTOS_MAX} photos (maximum)</div>`}</div>
+        ${phBloc(t, false)}${photosDe(t).length < PHOTOS_MAX ? `<div class="phadd"><button class="btn ghost small" data-act="photo" data-mode="camera" data-id="${t.id}">📷 Prendre une photo</button><button class="btn ghost small" data-act="photo" data-mode="galerie" data-id="${t.id}">🖼️ Galerie</button>${photosDe(t).length ? `<span class="who">${photosDe(t).length}/${PHOTOS_MAX}</span>` : ""}</div>` : `<div class="who">${PHOTOS_MAX} photos (maximum)</div>`}</div>
         <button class="icon" data-act="prio" data-id="${t.id}" aria-pressed="${prio(t)}" aria-label="Priorité" title="Priorité">★</button>
         <button class="icon" data-act="suppr" data-id="${t.id}" aria-label="Supprimer" title="Supprimer">✕</button></div>`;
     });
@@ -572,7 +572,9 @@ document.addEventListener("click", async e => {
   }
   if (A === "photo") {
     if (photosDe(S.taches[d.id]).length >= PHOTOS_MAX) return alert(PHOTOS_MAX + " photos au maximum par tâche.");
-    U.photoPour = d.id; champPhoto.value = ""; champPhoto.click(); return;
+    // « Prendre une photo » ouvre directement l'appareil photo ; « Galerie » ouvre les photos du téléphone.
+    const champ = d.mode === "camera" ? champCamera : champPhoto;
+    U.photoPour = d.id; champ.value = ""; champ.click(); return;
   }
   if (A === "phVoir") return ouvrirPhoto(d.id, Number(d.i));
   if (A === "phFermer") return fermerPhoto(true);
@@ -645,9 +647,13 @@ async function reduirePhoto(file) {
 }
 const champPhoto = document.createElement("input");
 champPhoto.type = "file"; champPhoto.accept = "image/*"; champPhoto.hidden = true;
-document.body.appendChild(champPhoto);
-champPhoto.addEventListener("change", async () => {
-  const file = champPhoto.files && champPhoto.files[0], tid = U.photoPour; U.photoPour = null;
+const champCamera = document.createElement("input");
+champCamera.type = "file"; champCamera.accept = "image/*"; champCamera.setAttribute("capture", "environment"); champCamera.hidden = true;
+document.body.appendChild(champPhoto); document.body.appendChild(champCamera);
+champPhoto.addEventListener("change", () => photoChoisie(champPhoto));
+champCamera.addEventListener("change", () => photoChoisie(champCamera));
+async function photoChoisie(champ) {
+  const file = champ.files && champ.files[0], tid = U.photoPour; U.photoPour = null;
   const t = S.taches[tid]; if (!file || !t) return;
   let blob;
   try { blob = await reduirePhoto(file); } catch (e) { blob = null; }
@@ -660,7 +666,7 @@ champPhoto.addEventListener("change", async () => {
   S.outbox.push({ op: uid(), type: "photo", tache: { id: tid, secteur: n.secteur }, photo: { pid }, cree: Date.now() });
   save("outbox", "taches"); render();
   clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800);
-});
+}
 function photoPerdue(o) {
   S.outbox = S.outbox.filter(x => x !== o);
   const t = S.taches[o.tache.id];
@@ -774,6 +780,7 @@ function supprimerPhoto() {
 }
 document.head.insertAdjacentHTML("beforeend", `<style>
 .phs.grand{display:grid;gap:8px}
+.phadd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
 .phs.petit{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .ph{border:0;padding:0;background:var(--surface2);border-radius:10px;overflow:hidden;cursor:zoom-in;display:block;color:var(--muted)}
 .phs.grand .ph{width:100%;min-height:120px}
