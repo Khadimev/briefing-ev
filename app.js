@@ -77,8 +77,8 @@ function queue(type, tache, extra) {
   save("outbox", "taches"); render();
   clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800);
 }
-async function api(body) {
-  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 30000);
+async function api(body, delai) {
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), delai || 30000);
   try {
     const r = await fetch(API_URL, { method: "POST", body: JSON.stringify(Object.assign({ v: 2, appareil: S.appareil }, body)), signal: ctl.signal });
     return await r.json();
@@ -90,20 +90,39 @@ async function sync() {
   syncing = true; status();
   let recus = new Set();
   try {
-    const ops = S.outbox.slice(0, 150);
+    // Une seule photo par envoi (réseau faible), dans l'ordre de la file.
+    const ops = []; let avecPhoto = false;
+    for (const o of S.outbox) {
+      if (ops.length >= 150) break;
+      if (o.type === "photo") {
+        if (avecPhoto) break;
+        const blob = await phGet("p:" + o.photo.pid);
+        if (!blob) {
+          if (await phDb()) { photoPerdue(o); continue; } // vraiment absente du téléphone
+          break; // stockage momentanément inaccessible : on réessaiera plus tard
+        }
+        avecPhoto = true;
+        ops.push(Object.assign({}, o, { photo: { pid: o.photo.pid, data: await enBase64(blob) } }));
+      } else ops.push(o);
+    }
     ops.forEach(o => enVol.add(o.op));
-    const r = await api({ action: "synchro", codes: S.codes, ops });
+    const r = await api({ action: "synchro", codes: S.codes, ops }, avecPhoto ? 120000 : 30000);
     if (!r.ok) throw new Error(messageErreur(r.erreur, true));
-    recus = new Set(r.resultats ? r.resultats.map(x => x.op) : (r.recus || []));
+    recus = new Set(r.resultats ? r.resultats.filter(x => x.etat !== "reessayer").map(x => x.op) : (r.recus || []));
+    let aRenvoyer = "";
     (r.resultats || []).forEach(x => {
       if (x.etat === "ok") return;
       const o = S.outbox.find(y => y.op === x.op);
       const t = o && (S.taches[o.tache.id] || o.tache);
       const nom = t && t.activite ? "« " + t.activite + " »" : "Une tâche";
+      if (x.etat === "reessayer") { aRenvoyer = "Une photo de " + nom + " n’est pas encore enregistrée (" + x.raison + "). Elle reste dans le téléphone et sera renvoyée."; return; }
       S.alertes.push({ le: new Date().toISOString(), texte: x.etat === "conflit"
         ? nom + " : " + x.raison + ". Les deux informations sont gardées, à vérifier dans le Suivi."
+        : o && o.type === "photo" ? "La photo de " + nom + " n’a pas été enregistrée : " + x.raison + "."
         : nom + " n’a pas été enregistrée : " + x.raison + "." });
+      if (o && o.type === "photo") phDel("p:" + o.photo.pid);
     });
+    const photosRecues = S.outbox.filter(o => o.type === "photo" && recus.has(o.op)).map(o => o.photo.pid);
     S.alertes = S.alertes.slice(-20);
     S.outbox = S.outbox.filter(o => !recus.has(o.op));
     const n = {};
@@ -112,9 +131,11 @@ async function sync() {
       if (o.type === "supprimer") { if (n[o.tache.id]) n[o.tache.id] = Object.assign({}, n[o.tache.id], { statut: "annulé" }); }
       else if (S.taches[o.tache.id]) n[o.tache.id] = S.taches[o.tache.id];
     });
+    await rangerPhotosEnvoyees(photosRecues, n);
     S.taches = n; S.secteurs = r.secteurs || S.secteurs; S.role = r.role || S.role; S.synchro = r.heure;
     if (r.moi) S.ident = r.moi;
-    U.err = "";
+    U.err = aRenvoyer;
+    setTimeout(prechargerPhotos, 500);
     save("outbox", "taches", "secteurs", "role", "synchro", "ident", "alertes");
   } catch (e) {
     U.err = e.name === "AbortError" ? "Réseau trop lent : les validations restent dans le téléphone et partiront plus tard." :
@@ -179,6 +200,7 @@ function deconnexion() {
   if (!confirm(msg)) return;
   ["codes", "role", "secteurs", "taches", "outbox", "synchro", "ident", "alertes"].forEach(k => { try { localStorage.removeItem(K + k); } catch (e) {} });
   S.codes = []; S.role = null; S.secteurs = []; S.taches = {}; S.outbox = []; S.synchro = null; S.ident = null; S.alertes = []; U.codes = null;
+  phVider();
   U.view = null; U.sect = null; render();
 }
 
@@ -205,6 +227,7 @@ function render() {
   status(); nav();
   document.getElementById("sub").textContent = S.role === "admin" ? "Espace responsable" + (S.ident && S.ident.nom ? " · " + affNom(S.ident.nom) : "") : "Espaces Verts · Cap Skirring";
   ({ taches: renderTaches, programme: renderProgramme, suivi: renderSuivi, briefing: renderBriefing, reglages: renderReglages })[U.view]();
+  setTimeout(chargerPhotos, 0);
 }
 function dateTabs(withPicker) {
   const t = iso(new Date());
@@ -268,7 +291,8 @@ function renderTaches() {
       ${prio(t) || t.origine === "jardinier" || enAttente(t.id) || t.conflit ? `<div>${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">En attente d’envoi</span>' : ""}${t.conflit ? '<span class="badge ko">Vérification par le responsable</span>' : ""}</div>` : ""}
       <div class="act">${h(t.activite)}</div>
       ${t.precision ? `<div>${h(t.precision)}</div>` : ""}
-      ${t.pour ? `<div class="who">Pour : ${h(affNom(t.pour))}</div>` : ""}`;
+      ${t.pour ? `<div class="who">Pour : ${h(affNom(t.pour))}</div>` : ""}
+      ${phBloc(t, true)}`;
     if (reporte(t)) {
       html += `<div class="row"><span class="state">↷ Reportée à un autre jour</span></div>`;
     } else if (fait(t) || pasFait(t)) {
@@ -319,7 +343,8 @@ function renderProgramme() {
       ${s.missions ? `<div class="who">${h(s.missions)}</div>` : ""}<div style="margin-top:6px">`;
     list.forEach(t => {
       html += `<div class="tline"><div><strong>${h(t.activite)}</strong>${t.precision ? " · " + h(t.precision) : ""}${t.pour ? `<div class="who">Pour ${h(affNom(t.pour))}</div>` : ""}
-        <div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : reporte(t) ? '<span class="badge">Reporté</span>' : ""}${t.conflit ? '<span class="badge ko">À vérifier</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}</div></div>
+        <div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : reporte(t) ? '<span class="badge">Reporté</span>' : ""}${t.conflit ? '<span class="badge ko">À vérifier</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}</div>
+        ${phBloc(t, false)}${photosDe(t).length < PHOTOS_MAX ? `<button class="link" style="padding-left:0" data-act="photo" data-id="${t.id}">📷 Ajouter une photo${photosDe(t).length ? " (" + photosDe(t).length + "/" + PHOTOS_MAX + ")" : ""}</button>` : `<div class="who">${PHOTOS_MAX} photos (maximum)</div>`}</div>
         <button class="icon" data-act="prio" data-id="${t.id}" aria-pressed="${prio(t)}" aria-label="Priorité" title="Priorité">★</button>
         <button class="icon" data-act="suppr" data-id="${t.id}" aria-label="Supprimer" title="Supprimer">✕</button></div>`;
     });
@@ -350,6 +375,7 @@ function renderSuivi() {
         ${t.fait_par ? `<div class="who">${h(affNom(t.fait_par))}${t.fait_le ? ", " + quand(t.fait_le) : ""}</div>` : ""}
         ${(fait(t) || pasFait(t)) && t.valide_par && t.valide_fonction && t.valide_fonction !== "Jardinier" ? `<div class="who">Validé par ${h(affNom(t.valide_par))} (${h(t.valide_fonction)})${t.valide_le ? ", " + quand(t.valide_le) : ""}</div>` : ""}
         ${t.remarque ? `<div class="who">Remarque : ${h(t.remarque)}</div>` : ""}
+        ${phBloc(t, false)}
         ${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}
         ${c ? `<div class="notice" style="margin-top:6px"><strong>À vérifier :</strong> une autre information est arrivée pour cette tâche : « ${h(c.statut)} »${c.fait_par ? " par " + h(affNom(c.fait_par)) : ""}${c.remarque ? " (" + h(c.remarque) + ")" : ""}, envoyée${c.par ? " par " + h(affNom(c.par)) : ""}${c.le ? " " + quand(c.le) : ""}.
           <div class="row" style="margin-top:8px"><button class="btn ghost small" data-act="garder" data-c="actuel" data-id="${t.id}">Garder « ${h(t.statut)} »</button><button class="btn ghost small" data-act="garder" data-c="autre" data-id="${t.id}">Garder « ${h(c.statut)} »</button></div></div>` : ""}
@@ -510,7 +536,9 @@ document.addEventListener("click", async e => {
         const nid = (A === "reprendre" ? "r_" : "c_") + t.id + "_" + U.date;
         if (S.taches[nid] || deja.some(x => x.activite === t.activite && x.precision === t.precision)) return;
         if (A === "reprendre") S.taches[t.id] = Object.assign({}, t, { reporte_vers: nid }, t.statut === "à faire" || !t.statut ? { statut: "reporté" } : {});
-        n++; queue("programmer", nouvelleTache(Object.assign({ id: nid, secteur: s.id, activite: t.activite, precision: t.precision, pour: t.pour, priorite: prio(t) }, A === "reprendre" ? { report_de: t.id } : {})));
+        const ph = photosDe(t).filter(x => x.f);
+        n++; queue("programmer", nouvelleTache(Object.assign({ id: nid, secteur: s.id, activite: t.activite, precision: t.precision, pour: t.pour, priorite: prio(t) },
+          A === "reprendre" ? { report_de: t.id } : { copie_de: t.id }, ph.length ? { photos: ph } : {})));
       });
     });
     if (!n) alert("Rien à ajouter : ces tâches sont déjà au programme.");
@@ -542,6 +570,15 @@ document.addEventListener("click", async e => {
     } catch (er) { alert("Changement impossible : vérifie le réseau."); }
     return;
   }
+  if (A === "photo") {
+    if (photosDe(S.taches[d.id]).length >= PHOTOS_MAX) return alert(PHOTOS_MAX + " photos au maximum par tâche.");
+    U.photoPour = d.id; champPhoto.value = ""; champPhoto.click(); return;
+  }
+  if (A === "phVoir") return ouvrirPhoto(d.id, Number(d.i));
+  if (A === "phFermer") return fermerPhoto(true);
+  if (A === "phZoom") { if (U.voir) { U.voir.z = Math.max(1, Math.min(4, U.voir.z + Number(d.z))); afficherPhoto(); } return; }
+  if (A === "phNav") { if (U.voir) { const n = photosDe(S.taches[U.voir.id]).length; U.voir.i = (U.voir.i + Number(d.n) + n) % n; U.voir.z = 1; afficherPhoto(); } return; }
+  if (A === "phSuppr") return supprimerPhoto();
   if (A === "install") { U.installEvt.prompt(); U.installEvt = null; return render(); }
   if (A === "share") { try { await navigator.share({ title: "Briefing Espaces Verts", url: location.href.split("#")[0] }); } catch (er) {} return; }
   if (A === "logout") return deconnexion();
@@ -549,11 +586,210 @@ document.addEventListener("click", async e => {
 document.addEventListener("input", e => { if (e.target.id === "btxt") { B().edit = e.target.value; save("brief"); } });
 document.addEventListener("change", e => { if (e.target.dataset.in === "date" && e.target.value) { U.date = e.target.value; U.add = null; render(); } });
 document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && U.voir) return fermerPhoto(true);
   if (e.key !== "Enter") return;
   if (e.target.id === "code") connexion(e.target.value);
   if (e.target.id === "code2") document.querySelector('[data-act="login2"]').click();
 });
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); U.installEvt = e; if (U.view === "reglages") render(); });
+
+/* ---------- photos ---------- */
+const PHOTOS_MAX = 3;
+const PHOTO_TAILLE = 1600; // pixels sur le grand côté : assez pour bien voir les détails
+function photosDe(t) {
+  if (!t || !t.photos) return [];
+  if (Array.isArray(t.photos)) return t.photos;
+  try { const a = JSON.parse(t.photos); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+const phCle = x => x.f ? "f:" + x.f : "p:" + x.p;
+// Les photos sont gardées dans le téléphone (IndexedDB) : visibles sans réseau, et une photo prise
+// hors connexion attend là jusqu'à son envoi.
+const PH = { db: null, mem: {}, url: {}, enCours: new Set(), absentes: new Set() };
+function phDb() {
+  if (PH.db) return PH.db;
+  PH.db = new Promise(res => {
+    try {
+      const q = indexedDB.open("bev_photos", 1);
+      q.onupgradeneeded = () => q.result.createObjectStore("p");
+      q.onsuccess = () => res(q.result); q.onerror = () => res(null); q.onblocked = () => res(null);
+    } catch (e) { res(null); }
+  });
+  return PH.db;
+}
+function phTx(mode, f) {
+  return phDb().then(db => !db ? null : new Promise(res => {
+    try { const tx = db.transaction("p", mode); const r = f(tx.objectStore("p")); tx.oncomplete = () => res(r && "result" in r ? r.result : true); tx.onerror = tx.onabort = () => res(null); }
+    catch (e) { res(null); }
+  }));
+}
+async function phGet(k) { if (PH.mem[k]) return PH.mem[k]; return (await phTx("readonly", st => st.get(k))) || null; }
+async function phPut(k, blob) { PH.mem[k] = blob; const ok = await phTx("readwrite", st => { st.put(blob, k); }); if (ok) delete PH.mem[k]; return !!ok || !!PH.mem[k]; }
+async function phDel(k) { delete PH.mem[k]; if (PH.url[k]) { URL.revokeObjectURL(PH.url[k]); delete PH.url[k]; } await phTx("readwrite", st => { st.delete(k); }); }
+async function phCles() { return (await phTx("readonly", st => st.getAllKeys())) || []; }
+function phVider() { PH.mem = {}; Object.values(PH.url).forEach(u => URL.revokeObjectURL(u)); PH.url = {}; phTx("readwrite", st => { st.clear(); }); }
+function enBase64(blob) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); }); }
+function depuisBase64(b64) { const s = atob(b64), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return new Blob([a], { type: "image/jpeg" }); }
+
+/* Réduit la photo à 1600 pixels (grand côté), qualité 85 % : nette, mais légère à envoyer. */
+async function reduirePhoto(file) {
+  let src, w, hh;
+  try { src = await createImageBitmap(file, { imageOrientation: "from-image" }); w = src.width; hh = src.height; }
+  catch (e) {
+    src = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+    w = src.naturalWidth; hh = src.naturalHeight;
+  }
+  const k = Math.min(1, PHOTO_TAILLE / Math.max(w, hh));
+  const c = document.createElement("canvas"); c.width = Math.round(w * k); c.height = Math.round(hh * k);
+  c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+  return await new Promise(res => c.toBlob(res, "image/jpeg", 0.85));
+}
+const champPhoto = document.createElement("input");
+champPhoto.type = "file"; champPhoto.accept = "image/*"; champPhoto.hidden = true;
+document.body.appendChild(champPhoto);
+champPhoto.addEventListener("change", async () => {
+  const file = champPhoto.files && champPhoto.files[0], tid = U.photoPour; U.photoPour = null;
+  const t = S.taches[tid]; if (!file || !t) return;
+  let blob;
+  try { blob = await reduirePhoto(file); } catch (e) { blob = null; }
+  if (!blob) return alert("Cette photo n’a pas pu être lue. Essaie avec une autre photo.");
+  const pid = "p" + uid();
+  if (!(await phPut("p:" + pid, blob))) return alert("Le téléphone n’a pas pu garder la photo. Libère de la place et réessaie.");
+  const n = Object.assign({}, S.taches[tid]);
+  n.photos = photosDe(n).concat([{ p: pid, par: S.ident && S.ident.nom || "", le: new Date().toISOString() }]);
+  S.taches[tid] = n;
+  S.outbox.push({ op: uid(), type: "photo", tache: { id: tid, secteur: n.secteur }, photo: { pid }, cree: Date.now() });
+  save("outbox", "taches"); render();
+  clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800);
+});
+function photoPerdue(o) {
+  S.outbox = S.outbox.filter(x => x !== o);
+  const t = S.taches[o.tache.id];
+  if (t) S.taches[o.tache.id] = Object.assign({}, t, { photos: photosDe(t).filter(x => x.p !== o.photo.pid || x.f) });
+  S.alertes.push({ le: new Date().toISOString(), texte: "Une photo de « " + (t ? t.activite : "une tâche") + " » n’a pas pu être retrouvée dans le téléphone. Reprends-la." });
+}
+/* Après l'envoi, la photo gardée dans le téléphone prend la référence Drive : pas besoin de la retélécharger. */
+async function rangerPhotosEnvoyees(pids, taches) {
+  for (const pid of pids) {
+    let f = null;
+    Object.values(taches).some(t => photosDe(t).some(x => { if (x.p === pid && x.f) { f = x.f; return true; } return false; }));
+    const blob = await phGet("p:" + pid);
+    if (f && blob) await phPut("f:" + f, blob);
+    await phDel("p:" + pid);
+  }
+}
+function phImg(k, alt) {
+  if (PH.url[k]) return `<img src="${PH.url[k]}" alt="${h(alt)}">`;
+  return `<span class="phwait">${PH.absentes.has(k) ? "Photo indisponible" : navigator.onLine || k.startsWith("p:") ? "Chargement de la photo…" : "Photo visible quand le téléphone aura du réseau"}</span>`;
+}
+function phBloc(t, grand) {
+  const l = photosDe(t); if (!l.length) return "";
+  return `<div class="phs ${grand ? "grand" : "petit"}">${l.map((x, i) => `<button class="ph" data-act="phVoir" data-id="${h(t.id)}" data-i="${i}" data-k="${h(phCle(x))}" aria-label="Agrandir la photo ${i + 1}">${phImg(phCle(x), "Photo " + (i + 1) + " : " + (t.activite || ""))}</button>`).join("")}</div>
+    ${grand ? `<div class="who">Touche la photo pour l’agrandir.</div>` : ""}`;
+}
+function phMontrer(k) {
+  document.querySelectorAll(".ph[data-k]").forEach(b => { if (b.dataset.k === k) b.innerHTML = phImg(k, b.getAttribute("aria-label") || "Photo"); });
+  if (U.voir) afficherPhoto();
+}
+/* Affiche les photos de l'écran : d'abord depuis le téléphone, sinon depuis le serveur (3 par demande). */
+async function chargerPhotos(cles) {
+  cles = cles || Array.from(new Set(Array.from(document.querySelectorAll(".ph[data-k]")).map(b => b.dataset.k)));
+  const aDemander = [];
+  for (const k of cles) {
+    if (PH.url[k] || PH.enCours.has(k)) continue;
+    const blob = await phGet(k);
+    if (blob) { PH.url[k] = URL.createObjectURL(blob); phMontrer(k); }
+    else if (k.startsWith("f:") && !PH.absentes.has(k)) aDemander.push(k);
+  }
+  if (!aDemander.length || !navigator.onLine || !S.codes.length || !/^https:\/\//.test(API_URL)) return;
+  aDemander.forEach(k => PH.enCours.add(k));
+  try {
+    for (let i = 0; i < aDemander.length; i += 3) {
+      const lot = aDemander.slice(i, i + 3);
+      const r = await api({ action: "photos", codes: S.codes, ids: lot.map(k => k.slice(2)) }, 90000);
+      if (!r.ok) break;
+      for (const k of lot) {
+        const b64 = r.photos && r.photos[k.slice(2)];
+        if (b64) { const blob = depuisBase64(b64); await phPut(k, blob); PH.url[k] = URL.createObjectURL(blob); }
+        else if ((r.absentes || []).includes(k.slice(2))) PH.absentes.add(k);
+        phMontrer(k);
+      }
+    }
+  } catch (e) {}
+  aDemander.forEach(k => PH.enCours.delete(k));
+}
+/* Après chaque synchronisation : garde dans le téléphone les photos des tâches d'hier à après-demain,
+   pour les voir même sans réseau, et efface celles qui ne servent plus. */
+async function prechargerPhotos() {
+  const hier = shift(iso(new Date()), -1), apres = shift(iso(new Date()), 2), utiles = new Set(), aCharger = [];
+  Object.values(S.taches).forEach(t => photosDe(t).forEach(x => {
+    utiles.add(phCle(x));
+    if (!annule(t) && t.date >= hier && t.date <= apres) aCharger.push(phCle(x));
+  }));
+  S.outbox.forEach(o => { if (o.type === "photo") utiles.add("p:" + o.photo.pid); });
+  // Seules les photos déjà envoyées (f:) sont effacées ; une photo pas encore envoyée n'est jamais effacée ici.
+  if (Object.keys(S.taches).length) for (const k of await phCles()) if (k.startsWith("f:") && !utiles.has(k)) await phDel(k);
+  await chargerPhotos(aCharger.filter(k => k.startsWith("f:")));
+}
+/* Plein écran, avec zoom */
+function ouvrirPhoto(id, i) {
+  U.voir = { id, i: i || 0, z: 1 };
+  try { history.pushState({ photo: 1 }, ""); } catch (e) {}
+  afficherPhoto();
+}
+function fermerPhoto(retour) {
+  if (!U.voir) return;
+  U.voir = null; const v = document.getElementById("viewer"); if (v) v.remove();
+  if (retour) try { if (history.state && history.state.photo) history.back(); } catch (e) {}
+}
+window.addEventListener("popstate", () => { if (U.voir) fermerPhoto(false); });
+function afficherPhoto() {
+  const t = S.taches[U.voir.id], l = photosDe(t);
+  if (!l.length) return fermerPhoto(true);
+  if (U.voir.i >= l.length) U.voir.i = l.length - 1;
+  const x = l[U.voir.i], k = phCle(x), z = U.voir.z;
+  let v = document.getElementById("viewer");
+  if (!v) { v = document.createElement("div"); v.id = "viewer"; v.setAttribute("role", "dialog"); v.setAttribute("aria-modal", "true"); v.setAttribute("aria-label", "Photo"); document.body.appendChild(v); }
+  if (!PH.url[k]) chargerPhotos([k]);
+  v.innerHTML = `<div class="vbar"><button class="btn ghost small" data-act="phFermer">✕ Fermer</button>
+      <span class="vt">${h(t.activite || "")}${l.length > 1 ? " · " + (U.voir.i + 1) + "/" + l.length : ""}</span>
+      <button class="btn ghost small" data-act="phZoom" data-z="-1" ${z <= 1 ? "disabled" : ""} aria-label="Réduire">－</button>
+      <button class="btn ghost small" data-act="phZoom" data-z="1" ${z >= 4 ? "disabled" : ""} aria-label="Agrandir">＋</button></div>
+    <div class="vimg ${z > 1 ? "zoom" : ""}">${PH.url[k] ? `<img src="${PH.url[k]}" alt="Photo ${U.voir.i + 1}" style="${z > 1 ? "width:" + z * 100 + "%" : ""}">` : `<span class="phwait">${phImg(k, "")}</span>`}</div>
+    <div class="vbar">${l.length > 1 ? `<button class="btn ghost small" data-act="phNav" data-n="-1">‹ Précédente</button><button class="btn ghost small" data-act="phNav" data-n="1">Suivante ›</button>` : ""}
+      ${S.role === "admin" ? `<button class="btn clay small" style="margin-left:auto" data-act="phSuppr">Retirer cette photo</button>` : ""}</div>
+    ${x.par ? `<div class="vt" style="padding:0 12px 12px">Photo de ${h(affNom(x.par))}${x.le ? ", " + quand(x.le) : ""}</div>` : ""}`;
+}
+function supprimerPhoto() {
+  if (!U.voir || S.role !== "admin") return;
+  const t = S.taches[U.voir.id], l = photosDe(t), x = l[U.voir.i];
+  if (!x || !confirm("Retirer cette photo de la tâche ?")) return;
+  const n = Object.assign({}, t, { photos: l.filter(y => y !== x) });
+  S.taches[t.id] = n;
+  const attente = !x.f && S.outbox.find(o => o.type === "photo" && o.photo.pid === x.p && !enVol.has(o.op));
+  if (attente) { S.outbox = S.outbox.filter(o => o !== attente); phDel("p:" + x.p); }
+  else S.outbox.push({ op: uid(), type: "photoSuppr", tache: { id: t.id, secteur: t.secteur }, photo: x.f ? { f: x.f } : { pid: x.p }, cree: Date.now() });
+  save("outbox", "taches");
+  if (!n.photos.length) fermerPhoto(true); else afficherPhoto();
+  render(); clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800);
+}
+document.head.insertAdjacentHTML("beforeend", `<style>
+.phs.grand{display:grid;gap:8px}
+.phs.petit{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.ph{border:0;padding:0;background:var(--surface2);border-radius:10px;overflow:hidden;cursor:zoom-in;display:block;color:var(--muted)}
+.phs.grand .ph{width:100%;min-height:120px}
+.phs.grand .ph img{display:block;width:100%;height:auto;max-height:75vh;object-fit:contain;background:#000}
+.phs.petit .ph{width:88px;height:88px}
+.phs.petit .ph img{width:100%;height:100%;object-fit:cover;display:block}
+.phwait{display:flex;align-items:center;justify-content:center;min-height:inherit;height:100%;padding:10px;font-size:13px;text-align:center}
+#viewer{position:fixed;inset:0;z-index:20;background:#000;color:#fff;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+#viewer .vbar{display:flex;gap:8px;align-items:center;padding:10px 12px;flex-wrap:wrap}
+#viewer .vt{font-size:14px;opacity:.85;flex:1;min-width:0}
+#viewer .vimg{flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;-webkit-overflow-scrolling:touch}
+#viewer .vimg.zoom{display:block}
+#viewer .vimg img{max-width:100%;max-height:100%;object-fit:contain;display:block;margin:auto}
+#viewer .vimg.zoom img{max-width:none;max-height:none;height:auto}
+#viewer .btn.ghost{background:#2a2a2a;color:#fff;border-color:#444}
+</style>`);
 
 async function chargerCodes() {
   if (!navigator.onLine || S.role !== "admin") return;
