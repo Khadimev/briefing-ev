@@ -1,5 +1,5 @@
 /* Garde l'application dans le téléphone pour qu'elle s'ouvre sans Internet. */
-const CACHE = "briefing-ev-v6";
+const CACHE = "briefing-ev-v7";
 const FICHIERS = ["./", "index.html", "app.js", "data.js", "config.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FICHIERS)).then(() => self.skipWaiting()));

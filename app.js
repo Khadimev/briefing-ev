@@ -287,7 +287,7 @@ function renderTaches() {
   }
   if (!list.length) html += `<p class="muted" style="margin-bottom:0">${S.synchro ? "Aucune tâche programmée pour ce jour." : "Les tâches arriveront dès que le téléphone aura du réseau."}</p>`;
   list.forEach(t => {
-    html += `<div class="task">
+    html += `<div class="task ${etatClasse(t)}">
       ${prio(t) || t.origine === "jardinier" || enAttente(t.id) || t.conflit ? `<div>${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">En attente d’envoi</span>' : ""}${t.conflit ? '<span class="badge ko">Vérification par le responsable</span>' : ""}</div>` : ""}
       <div class="act">${h(t.activite)}</div>
       ${t.precision ? `<div>${h(t.precision)}</div>` : ""}
@@ -296,15 +296,19 @@ function renderTaches() {
     if (reporte(t)) {
       html += `<div class="row"><span class="state">↷ Reportée à un autre jour</span></div>`;
     } else if (fait(t) || pasFait(t)) {
-      html += `<div class="row"><span class="state ${fait(t) ? "done" : "ko"}">${fait(t) ? "✓ Fait" : "✗ Pas fait"}${t.fait_par ? " par " + h(affNom(t.fait_par)) : ""}${t.fait_le ? ", " + quand(t.fait_le) : ""}</span>
+      html += `<div class="row"><div class="choix">
+          <span class="ch ${fait(t) ? "on-done" : "off"}" aria-hidden="${fait(t) ? "false" : "true"}">${fait(t) ? "☑" : "☐"} Fait</span>
+          <span class="ch ${pasFait(t) ? "on-ko" : "off"}" aria-hidden="${pasFait(t) ? "false" : "true"}">${pasFait(t) ? "☒" : "☐"} Pas fait</span></div>
         <button class="btn ghost small" data-act="annuler" data-id="${t.id}" ${moi ? "" : "disabled"}>Modifier</button></div>
+        <div class="state ${fait(t) ? "done" : "nf"}">${fait(t) ? "✓ Fait" : "✗ Pas fait"}${t.fait_par ? " par " + h(affNom(t.fait_par)) : ""}${t.fait_le ? ", " + quand(t.fait_le) : ""}</div>
         ${t.remarque ? `<div class="muted">Remarque : ${h(t.remarque)}</div>` : ""}`;
     } else if (U.ko === t.id) {
       html += `<label class="lbl" for="rq">Pourquoi ? (facultatif)</label><textarea id="rq" placeholder="Ex. machine en panne, pluie, manque de produit"></textarea>
         <div class="row" style="margin-top:8px"><button class="btn clay small" data-act="pasfait" data-id="${t.id}">Enregistrer « pas fait »</button><button class="btn ghost small" data-act="ko" data-id="">Annuler</button></div>`;
     } else {
-      html += `<div class="row"><button class="btn primary" style="flex:2" data-act="fait" data-id="${t.id}" ${moi ? "" : "disabled"}>C’est fait</button>
-        <button class="btn ghost" style="flex:1" data-act="ko" data-id="${t.id}" ${moi ? "" : "disabled"}>Pas fait</button></div>`;
+      html += `<div class="row"><span class="badge todo">À faire</span></div>
+        <div class="row"><button class="btn coche fait" style="flex:2" data-act="fait" data-id="${t.id}" ${moi ? "" : "disabled"}>☐ C’est fait</button>
+        <button class="btn coche pasfait" style="flex:1" data-act="ko" data-id="${t.id}" ${moi ? "" : "disabled"}>☐ Pas fait</button></div>`;
     }
     html += `</div>`;
   });
@@ -343,7 +347,7 @@ function renderProgramme() {
       ${s.missions ? `<div class="who">${h(s.missions)}</div>` : ""}<div style="margin-top:6px">`;
     list.forEach(t => {
       html += `<div class="tline"><div><strong>${h(t.activite)}</strong>${t.precision ? " · " + h(t.precision) : ""}${t.pour ? `<div class="who">Pour ${h(affNom(t.pour))}</div>` : ""}
-        <div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : reporte(t) ? '<span class="badge">Reporté</span>' : ""}${t.conflit ? '<span class="badge ko">À vérifier</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}</div>
+        <div>${fait(t) ? BADGE_FAIT : pasFait(t) ? BADGE_PASFAIT : reporte(t) ? '<span class="badge">Reporté</span>' : ""}${t.conflit ? '<span class="badge ko">À vérifier</span>' : ""}${enAttente(t.id) ? '<span class="badge wait">À envoyer</span>' : ""}</div>
         ${phBloc(t, false)}${photosDe(t).length < PHOTOS_MAX ? `<div class="phadd"><button class="btn ghost small" data-act="photo" data-mode="camera" data-id="${t.id}">📷 Prendre une photo</button><button class="btn ghost small" data-act="photo" data-mode="galerie" data-id="${t.id}">🖼️ Galerie</button>${photosDe(t).length ? `<span class="who">${photosDe(t).length}/${PHOTOS_MAX}</span>` : ""}</div>` : `<div class="who">${PHOTOS_MAX} photos (maximum)</div>`}</div>
         <button class="icon" data-act="prio" data-id="${t.id}" aria-pressed="${prio(t)}" aria-label="Priorité" title="Priorité">★</button>
         <button class="icon" data-act="suppr" data-id="${t.id}" aria-label="Supprimer" title="Supprimer">✕</button></div>`;
@@ -370,7 +374,7 @@ function renderSuivi() {
       <div class="who">${last ? "Dernière validation " + quand(last) : "Aucune validation reçue"}</div><div style="margin-top:6px">`;
     l.forEach(t => {
       const c = conflitDe(t);
-      html += `<div class="tline" style="grid-template-columns:1fr"><div>${fait(t) ? '<span class="badge done">Fait</span>' : pasFait(t) ? '<span class="badge ko">Pas fait</span>' : reporte(t) ? '<span class="badge">Reporté</span>' : '<span class="badge">À faire</span>'}${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}
+      html += `<div class="tline suivi ${etatClasse(t)}" style="grid-template-columns:1fr"><div>${fait(t) ? BADGE_FAIT : pasFait(t) ? BADGE_PASFAIT : reporte(t) ? '<span class="badge">Reporté</span>' : BADGE_AFAIRE}${prio(t) ? '<span class="badge prio">Priorité</span>' : ""}${t.origine === "jardinier" ? '<span class="badge">Ajouté par l’équipe</span>' : ""}
         <strong>${h(t.activite)}</strong>${t.precision ? " · " + h(t.precision) : ""}
         ${t.fait_par ? `<div class="who">${h(affNom(t.fait_par))}${t.fait_le ? ", " + quand(t.fait_le) : ""}</div>` : ""}
         ${(fait(t) || pasFait(t)) && t.valide_par && t.valide_fonction && t.valide_fonction !== "Jardinier" ? `<div class="who">Validé par ${h(affNom(t.valide_par))} (${h(t.valide_fonction)})${t.valide_le ? ", " + quand(t.valide_le) : ""}</div>` : ""}
@@ -383,8 +387,8 @@ function renderSuivi() {
           ? `<div class="row" style="margin-top:6px"><button class="btn ghost small" data-act="annuler" data-id="${t.id}">Modifier</button></div>`
           : `<div class="row" style="margin-top:8px">
               <select id="sp_${t.id}" aria-label="Jardinier" style="flex:1;width:auto;min-width:150px">${s.jardiniers.map(n => `<option value="${h(n)}" ${n === (t.pour || s.jardiniers[0]) ? "selected" : ""}>${h(affNom(n))}</option>`).join("")}</select>
-              <button class="btn primary small" data-act="sfait" data-id="${t.id}">Fait</button>
-              <button class="btn ghost small" data-act="spasfait" data-id="${t.id}">Pas fait</button></div>`}
+              <button class="btn coche fait small" data-act="sfait" data-id="${t.id}">☐ Fait</button>
+              <button class="btn coche pasfait small" data-act="spasfait" data-id="${t.id}">☐ Pas fait</button></div>`}
         </div></div>`;
     });
     html += `</div></div>`;
@@ -595,6 +599,10 @@ document.addEventListener("keydown", e => {
 });
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); U.installEvt = e; if (U.view === "reglages") render(); });
 
+/* Couleur d'une tâche : rouge = à faire, vert = fait, orange = pas fait. */
+const etatClasse = t => fait(t) ? "st-done" : pasFait(t) ? "st-ko" : reporte(t) || annule(t) ? "" : "st-todo";
+const BADGE_FAIT = '<span class="badge done">✓ Fait</span>', BADGE_PASFAIT = '<span class="badge nf">✗ Pas fait</span>', BADGE_AFAIRE = '<span class="badge todo">À faire</span>';
+
 /* ---------- photos ---------- */
 const PHOTOS_MAX = 3;
 const PHOTO_TAILLE = 1600; // pixels sur le grand côté : assez pour bien voir les détails
@@ -779,6 +787,27 @@ function supprimerPhoto() {
   render(); clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800);
 }
 document.head.insertAdjacentHTML("beforeend", `<style>
+:root{--todo:#c62828;--todo-soft:#fde3e1;--nf:#b85c00;--nf-soft:#fdebd3}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--todo:#ff8a80;--todo-soft:#3d1c1a;--nf:#ffb35c;--nf-soft:#3a2a14}}
+:root[data-theme="dark"]{--todo:#ff8a80;--todo-soft:#3d1c1a;--nf:#ffb35c;--nf-soft:#3a2a14}
+.task.st-todo,.task.st-done,.task.st-ko{border-left:5px solid transparent;padding-left:10px;border-radius:0 8px 8px 0}
+.task.st-todo{border-left-color:var(--todo)}
+.task.st-done{border-left-color:var(--ok);background:var(--green-soft)}
+.task.st-ko{border-left-color:var(--nf);background:var(--nf-soft)}
+.tline.suivi.st-todo,.tline.suivi.st-done,.tline.suivi.st-ko{border-left:4px solid transparent;padding-left:8px}
+.tline.suivi.st-todo{border-left-color:var(--todo)}.tline.suivi.st-done{border-left-color:var(--ok)}.tline.suivi.st-ko{border-left-color:var(--nf)}
+.badge.todo{background:var(--todo-soft);color:var(--todo)}
+.badge.nf{background:var(--nf-soft);color:var(--nf)}
+.btn.coche{background:var(--surface);border:2px solid var(--line);color:var(--fg)}
+.btn.coche.fait{border-color:var(--ok);color:var(--ok)}
+.btn.coche.pasfait{border-color:var(--nf);color:var(--nf)}
+.btn.coche.fait:active{background:var(--ok);color:var(--surface)}.btn.coche.pasfait:active{background:var(--nf);color:var(--surface)}
+.choix{display:flex;gap:8px;flex:1;flex-wrap:wrap}
+.ch{display:inline-flex;align-items:center;gap:6px;border-radius:10px;padding:8px 12px;font-weight:700;font-size:15px;border:2px solid var(--line);color:var(--muted)}
+.ch.on-done{background:var(--ok);border-color:var(--ok);color:var(--surface)}
+.ch.on-ko{background:var(--nf);border-color:var(--nf);color:var(--surface)}
+.ch.off{opacity:.55}
+.state.nf{color:var(--nf);font-weight:600}
 .phs.grand{display:grid;gap:8px}
 .phadd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
 .phs.petit{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
