@@ -210,6 +210,7 @@ const ICONS = {
   programme: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18M8 15h3"/>',
   suivi: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   briefing: '<path d="M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3z"/><path d="M5 11a7 7 0 0014 0M12 18v3"/>',
+  productivite: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 6-7"/>',
   reglages: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>'
 };
 function nav() {
@@ -217,7 +218,7 @@ function nav() {
   if (!S.codes.length) { n.hidden = true; return; }
   n.hidden = false;
   const items = S.role === "admin"
-    ? [["programme", "Programme"], ["suivi", "Suivi"], ["briefing", "Briefing"], ["reglages", "Réglages"]]
+    ? [["programme", "Programme"], ["suivi", "Suivi"], ["productivite", "Productivité"], ["briefing", "Briefing"], ["reglages", "Réglages"]]
     : [["taches", "Mes tâches"], ["reglages", "Réglages"]];
   i.innerHTML = items.map(([v, l]) => `<button data-act="view" data-v="${v}" ${U.view === v ? 'aria-current="page"' : ""}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[v]}</svg>${l}</button>`).join("");
 }
@@ -226,7 +227,12 @@ function render() {
   if (!U.view || (S.role !== "admin" && !["taches", "reglages"].includes(U.view))) U.view = S.role === "admin" ? "programme" : "taches";
   status(); nav();
   document.getElementById("sub").textContent = S.role === "admin" ? "Espace responsable" + (S.ident && S.ident.nom ? " · " + affNom(S.ident.nom) : "") : "Espaces Verts · Cap Skirring";
-  ({ taches: renderTaches, programme: renderProgramme, suivi: renderSuivi, briefing: renderBriefing, reglages: renderReglages })[U.view]();
+  // Pendant une recherche, le clavier reste ouvert même si l'écran se met à jour (synchronisation).
+  const cherchait = document.activeElement && document.activeElement.id === "cherche";
+  const pos = cherchait ? document.activeElement.selectionStart : null;
+  ({ taches: renderTaches, programme: renderProgramme, suivi: renderSuivi, productivite: renderProductivite, briefing: renderBriefing, reglages: renderReglages })[U.view]();
+  appliquerRecherche();
+  if (cherchait) { const c = document.getElementById("cherche"); if (c) { c.focus(); try { c.setSelectionRange(pos, pos); } catch (e) {} } }
   setTimeout(chargerPhotos, 0);
 }
 function dateTabs(withPicker) {
@@ -331,18 +337,45 @@ function addPanel(s, mode) {
 
 /* ----- Responsable : programme ----- */
 const aReprendre = t => !fait(t) && !reporte(t) && !t.reporte_vers && t.origine !== "jardinier";
+/* Recherche d'un secteur (nom, jardinier ou mission), sans tenir compte des accents ni des majuscules.
+   Tous les secteurs sont dans la page ; la recherche montre ou cache les cartes sans redessiner l'écran,
+   pour ne pas gêner le clavier du téléphone. Pendant une recherche, Jardin et Golf sont cherchés ensemble. */
+const sansAccent = x => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+const texteSecteur = s => sansAccent([s.nom, s.id, (s.jardiniers || []).join(" "), s.missions, s.equipe === "golf" ? "golf" : "jardin"].join(" "));
+const attrSecteur = s => `data-cherche="${h(texteSecteur(s))}" data-eq="${h(s.equipe)}" ${s.equipe === U.equipe || U.cherche ? "" : "hidden"}`;
+function rechercheBox() {
+  return `<div class="cherche"><input type="search" id="cherche" enterkeyhint="search" autocomplete="off" placeholder="🔍 Rechercher un secteur ou un jardinier" aria-label="Rechercher un secteur ou un jardinier" value="${h(U.cherche || "")}">
+    <button class="btn ghost small" data-act="chercheVider" id="chercheVider" hidden>Effacer</button></div>
+    <div class="muted" id="chercheInfo" style="margin-top:6px" hidden></div>`;
+}
+function appliquerRecherche() {
+  const q = sansAccent(U.cherche).trim(), mots = q ? q.split(/\s+/) : [];
+  let n = 0;
+  document.querySelectorAll("[data-cherche]").forEach(c => {
+    const ok = q ? mots.every(m => c.dataset.cherche.includes(m)) : c.dataset.eq === U.equipe;
+    c.hidden = !ok; if (ok) n++;
+    const b = c.querySelector(".badge.eq"); if (b) b.hidden = !q;
+  });
+  const v = document.getElementById("chercheVider"), info = document.getElementById("chercheInfo");
+  if (v) v.hidden = !q;
+  const quoi = U.view === "productivite" ? "jardinier" : "secteur";
+  if (info) { info.hidden = !q; info.textContent = n ? n + " " + quoi + (n > 1 ? "s" : "") + " trouvé" + (n > 1 ? "s" : "") + (quoi === "secteur" ? " (Jardin et Golf)" : "") : "Aucun " + quoi + " trouvé. Essaie une partie du nom, par exemple « spa », ou le nom du jardinier."; }
+}
+const etiquetteEquipe = s => `<span class="badge eq" ${U.cherche ? "" : "hidden"}>${s.equipe === "golf" ? "Golf" : "Jardin"}</span>`;
+
 function renderProgramme() {
-  const secs = S.secteurs.filter(s => s.equipe === U.equipe);
+  const secs = S.secteurs, equipe = S.secteurs.filter(s => s.equipe === U.equipe);
   const hier = shift(U.date, -1);
-  const reste = secs.reduce((n, s) => n + tachesDe(s.id, hier).filter(aReprendre).length, 0);
+  const reste = equipe.reduce((n, s) => n + tachesDe(s.id, hier).filter(aReprendre).length, 0);
   let html = dateTabs(true) + equipeTabs() + errBox();
   html += `<div class="row" style="margin-top:12px">
     <button class="btn ghost small" data-act="reprendre" ${reste ? "" : "disabled"}>Reprendre ${reste ? "les " + reste + " tâches" : "les tâches"} non faites la veille</button>
     <button class="btn ghost small" data-act="copier">Copier le programme de la veille</button></div>`;
+  html += rechercheBox();
   html += `<div class="stack" style="margin-top:14px">`;
   secs.forEach(s => {
     const list = tachesDe(s.id, U.date);
-    html += `<div class="card"><div class="sect"><span class="name">${h(s.nom)}</span><span class="muted" style="margin-left:auto">${list.length ? list.length + " tâche" + (list.length > 1 ? "s" : "") : "Rien de programmé"}</span></div>
+    html += `<div class="card" ${attrSecteur(s)}><div class="sect">${etiquetteEquipe(s)}<span class="name">${h(s.nom)}</span><span class="muted" style="margin-left:auto">${list.length ? list.length + " tâche" + (list.length > 1 ? "s" : "") : "Rien de programmé"}</span></div>
       <div class="who">${h(s.jardiniers.map(affNom).join(", "))}</div>
       ${s.missions ? `<div class="who">${h(s.missions)}</div>` : ""}<div style="margin-top:6px">`;
     list.forEach(t => {
@@ -357,20 +390,93 @@ function renderProgramme() {
   main.innerHTML = html + `</div>`;
 }
 
+/* ----- Responsable : productivité ----- */
+/* Pour chaque jardinier, sur une période : tâches programmées, faites, pas faites (avec la raison),
+   non validées. Une tâche « Pour » un jardinier compte pour lui ; une tâche « Tout le secteur » compte
+   pour chaque jardinier du secteur (travail d'équipe). Les tâches annulées ou reportées ne comptent pas. */
+function periodeProd() {
+  const auj = iso(new Date()), d = new Date(auj + "T12:00:00");
+  const p = U.pPer || "semaine";
+  if (p === "7") return { du: shift(auj, -6), au: auj, nom: "7 derniers jours" };
+  if (p === "30") return { du: shift(auj, -29), au: auj, nom: "30 derniers jours" };
+  if (p === "mois") return { du: auj.slice(0, 8) + "01", au: auj, nom: "Ce mois-ci" };
+  return { du: shift(auj, -((d.getDay() + 6) % 7)), au: auj, nom: "Cette semaine (depuis lundi)" };
+}
+function statsProd(periode) {
+  const auj = iso(new Date()), parNom = {}, tot = { prog: 0, faites: 0, pasfaites: 0, nonval: 0, encours: 0, plus: 0 };
+  const fiche = n => parNom[n] || (parNom[n] = { nom: n, prog: 0, faites: 0, pasfaites: 0, nonval: 0, encours: 0, plus: 0, secteurs: new Set(), raisons: [] });
+  S.secteurs.filter(s => s.equipe === U.equipe).forEach(s => (s.jardiniers || []).forEach(n => fiche(n).secteurs.add(s.nom)));
+  Object.values(S.taches).forEach(t => {
+    if (annule(t) || reporte(t) || t.date < periode.du || t.date > periode.au) return;
+    const s = secteur(t.secteur); if (!s || s.equipe !== U.equipe) return;
+    const noms = t.pour ? [t.pour] : (s.jardiniers || []);
+    const etat = fait(t) ? "faites" : pasFait(t) ? "pasfaites" : t.date < auj ? "nonval" : "encours";
+    const ajout = t.origine === "jardinier";
+    if (ajout) { if (fait(t)) { tot.plus++; (t.fait_par ? [t.fait_par] : noms).forEach(n => { fiche(n).plus++; fiche(n).secteurs.add(s.nom); }); } return; }
+    tot.prog++; tot[etat]++;
+    noms.forEach(n => {
+      const f = fiche(n); f.prog++; f[etat]++; f.secteurs.add(s.nom);
+      if (etat === "pasfaites") f.raisons.push({ date: t.date, act: t.activite, rq: t.remarque || "" });
+    });
+  });
+  return { tot, liste: Object.values(parNom) };
+}
+const tauxDe = x => { const d = x.faites + x.pasfaites + x.nonval; return d ? Math.round(x.faites / d * 100) : null; };
+function barreProd(x) {
+  const d = x.faites + x.pasfaites + x.nonval || 1, w = v => (v / d * 100).toFixed(1) + "%";
+  return `<div class="pbar" aria-hidden="true"><i class="b-done" style="width:${w(x.faites)}"></i><i class="b-ko" style="width:${w(x.pasfaites)}"></i><i class="b-todo" style="width:${w(x.nonval)}"></i></div>`;
+}
+function detailProd(x) {
+  const parts = [`<span class="c-done">${x.faites} fait${x.faites > 1 ? "es" : "e"}</span>`];
+  if (x.pasfaites) parts.push(`<span class="c-ko">${x.pasfaites} pas faite${x.pasfaites > 1 ? "s" : ""}</span>`);
+  if (x.nonval) parts.push(`<span class="c-todo">${x.nonval} non validée${x.nonval > 1 ? "s" : ""}</span>`);
+  if (x.encours) parts.push(`${x.encours} en cours aujourd’hui`);
+  return parts.join(" · ") + ` <span class="muted">sur ${x.prog} programmée${x.prog > 1 ? "s" : ""}</span>`;
+}
+function renderProductivite() {
+  const per = periodeProd(), st = statsProd(per), T = st.tot, tx = tauxDe(T);
+  const dates = Object.values(S.taches).map(t => t.date).filter(Boolean).sort();
+  const debut = dates[0];
+  let html = `<div class="seg" role="group" aria-label="Période">${[["semaine", "Semaine"], ["7", "7 jours"], ["30", "30 jours"], ["mois", "Mois"]].map(([k, l]) => `<button data-act="pPer" data-p="${k}" aria-pressed="${(U.pPer || "semaine") === k}">${l}</button>`).join("")}</div>
+    <div style="margin-top:8px">${equipeTabs()}</div>
+    <p class="muted" style="margin:8px 0 0">${per.nom} : du ${longDate(per.du)} au ${longDate(per.au)}.</p>`;
+  if (debut && debut > per.du && per.du < shift(iso(new Date()), -13)) html += `<div class="notice" style="margin-top:8px">Le téléphone n’a les tâches que depuis le ${longDate(debut)}. Pour voir un mois entier, écris <strong>31</strong> dans la ligne <strong>JOURS_HISTORIQUE</strong> de l’onglet Config du Google Sheet.</div>`;
+  html += errBox();
+  html += `<div class="card" style="margin-top:14px"><div class="row"><span class="big">${tx === null ? "—" : tx + " %"}</span><span class="muted">tâches réalisées · ${U.equipe === "jardin" ? "Jardin" : "Golf"}</span></div>
+    ${T.prog ? barreProd(T) : ""}<div style="margin-top:8px;font-size:14px">${T.prog ? detailProd(T) : "Aucune tâche programmée sur cette période."}</div>
+    ${T.plus ? `<div class="who">+ ${T.plus} travail${T.plus > 1 ? "x" : ""} ajouté${T.plus > 1 ? "s" : ""} et fait${T.plus > 1 ? "s" : ""} par l’équipe elle-même</div>` : ""}</div>`;
+  const liste = st.liste.sort((a, b) => ((tauxDe(b) ?? -1) - (tauxDe(a) ?? -1)) || b.prog - a.prog || a.nom.localeCompare(b.nom));
+  html += `<h2>Par jardinier</h2>${rechercheBox()}<div class="stack" style="margin-top:12px">`;
+  liste.forEach(x => {
+    const t = tauxDe(x);
+    html += `<div class="card" ${`data-cherche="${h(sansAccent(x.nom + " " + Array.from(x.secteurs).join(" ")))}" data-eq="${h(U.equipe)}"`}>
+      <div class="sect"><span class="name" style="font-size:20px">${h(affNom(x.nom))}</span><span class="count ${t === null ? "" : t >= 80 ? "c-done" : t >= 50 ? "c-ko" : "c-todo"}">${t === null ? "—" : t + " %"}</span></div>
+      <div class="who">${h(Array.from(x.secteurs).join(", "))}</div>
+      ${x.prog ? barreProd(x) + `<div style="margin-top:6px;font-size:14px">${detailProd(x)}</div>` : `<div class="muted" style="margin-top:6px">Aucune tâche programmée pour lui sur cette période.</div>`}
+      ${x.plus ? `<div class="who">+ ${x.plus} travail${x.plus > 1 ? "x" : ""} ajouté${x.plus > 1 ? "s" : ""} par lui-même</div>` : ""}
+      ${x.raisons.length ? `<details style="margin-top:6px"><summary class="link" style="padding:0">Raisons des « pas fait » (${x.raisons.length})</summary>
+        <ul class="raisons">${x.raisons.sort((a, b) => b.date.localeCompare(a.date)).map(r => `<li><strong>${h(rel(r.date))}</strong> · ${h(r.act)} : ${r.rq ? h(r.rq) : '<span class="muted">pas de raison donnée</span>'}</li>`).join("")}</ul></details>` : ""}
+    </div>`;
+  });
+  html += `</div><p class="muted" style="margin-top:14px">Le taux compte les tâches « fait » sur les tâches des jours passés (faites, pas faites ou non validées). Les tâches d’aujourd’hui encore à faire, les tâches annulées et reportées ne comptent pas. Une tâche « Tout le secteur » compte pour chaque jardinier du secteur. Une tâche « pas fait » peut avoir une bonne raison (pluie, panne) : regarde les raisons avant de juger.</p>`;
+  main.innerHTML = html;
+}
+
 /* ----- Responsable : suivi ----- */
 function renderSuivi() {
-  const secs = S.secteurs.filter(s => s.equipe === U.equipe);
+  const secs = S.secteurs, equipe = S.secteurs.filter(s => s.equipe === U.equipe);
   let tot = 0, ok = 0;
-  secs.forEach(s => { const l = tachesDe(s.id, U.date); tot += l.length; ok += l.filter(fait).length; });
+  equipe.forEach(s => { const l = tachesDe(s.id, U.date); tot += l.length; ok += l.filter(fait).length; });
   let html = dateTabs(false) + equipeTabs() + errBox();
   html += `<div class="card" style="margin-top:14px"><div class="row"><span class="big">${ok}/${tot}</span><span class="muted">tâches faites · ${U.equipe === "jardin" ? "Jardin" : "Golf"}</span></div>
     <div class="prog"><i style="width:${tot ? Math.round(ok / tot * 100) : 0}%"></i></div>
-    <p class="muted" style="margin:8px 0 0">Données reçues ${S.synchro ? quand(S.synchro) : "jamais"}. Un jardinier sans réseau envoie ses validations dès qu’il en retrouve. Pour un jardinier sans téléphone, choisis son nom sous la tâche et valide à sa place.</p></div><div class="stack" style="margin-top:12px">`;
+    <p class="muted" style="margin:8px 0 0">Données reçues ${S.synchro ? quand(S.synchro) : "jamais"}. Un jardinier sans réseau envoie ses validations dès qu’il en retrouve. Pour un jardinier sans téléphone, choisis son nom sous la tâche et valide à sa place.</p></div>
+    <div style="margin-top:12px">${rechercheBox()}</div><div class="stack" style="margin-top:12px">`;
   secs.forEach(s => {
     const l = tachesDe(s.id, U.date);
     if (!l.length) return;
     const last = l.filter(t => t.fait_le).map(t => t.fait_le).sort().pop();
-    html += `<div class="card"><div class="sect"><span class="name">${h(s.nom)}</span><span class="count">${l.filter(fait).length}/${l.length}</span></div>
+    html += `<div class="card" ${attrSecteur(s)}><div class="sect">${etiquetteEquipe(s)}<span class="name">${h(s.nom)}</span><span class="count">${l.filter(fait).length}/${l.length}</span></div>
       <div class="who">${last ? "Dernière validation " + quand(last) : "Aucune validation reçue"}</div><div style="margin-top:6px">`;
     l.forEach(t => {
       const c = conflitDe(t);
@@ -496,7 +602,9 @@ document.addEventListener("click", async e => {
     return queue("resoudre", n, { choix: d.c === "autre" ? "autre" : "actuel" });
   }
   if (A === "date") { U.date = d.d; U.add = null; U.ko = null; return render(); }
-  if (A === "equipe") { U.equipe = d.e; U.add = null; return render(); }
+  if (A === "pPer") { U.pPer = d.p; return render(); }
+  if (A === "equipe") { U.equipe = d.e; U.add = null; U.cherche = ""; return render(); }
+  if (A === "chercheVider") { U.cherche = ""; const c = document.getElementById("cherche"); if (c) { c.value = ""; c.focus(); } appliquerRecherche(); return; }
   if (A === "sect") { U.sect = d.s; U.add = null; U.ko = null; return render(); }
   if (A === "moi") { if (d.n) S.moi[U.sect] = d.n; else delete S.moi[U.sect]; save("moi"); return render(); }
   if (A === "fait" || A === "pasfait") {
@@ -589,7 +697,10 @@ document.addEventListener("click", async e => {
   if (A === "share") { try { await navigator.share({ title: "Briefing Espaces Verts", url: location.href.split("#")[0] }); } catch (er) {} return; }
   if (A === "logout") return deconnexion();
 });
-document.addEventListener("input", e => { if (e.target.id === "btxt") { B().edit = e.target.value; save("brief"); } });
+document.addEventListener("input", e => {
+  if (e.target.id === "btxt") { B().edit = e.target.value; save("brief"); }
+  if (e.target.id === "cherche") { U.cherche = e.target.value; appliquerRecherche(); }
+});
 document.addEventListener("change", e => { if (e.target.dataset.in === "date" && e.target.value) { U.date = e.target.value; U.add = null; render(); } });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && U.voir) return fermerPhoto(true);
@@ -808,6 +919,14 @@ document.head.insertAdjacentHTML("beforeend", `<style>
 .ch.on-ko{background:var(--nf);border-color:var(--nf);color:var(--surface)}
 .ch.off{opacity:.55}
 .state.nf{color:var(--nf);font-weight:600}
+.pbar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--surface2);margin-top:8px}
+.pbar i{display:block;height:100%}.pbar .b-done{background:var(--ok)}.pbar .b-ko{background:var(--nf)}.pbar .b-todo{background:var(--todo)}
+.c-done{color:var(--ok);font-weight:600}.c-ko{color:var(--nf);font-weight:600}.c-todo{color:var(--todo);font-weight:600}
+.count.c-done,.count.c-ko,.count.c-todo{font-weight:700}
+.raisons{margin:6px 0 0;padding-left:18px;font-size:14px}.raisons li{margin:3px 0}
+.cherche{display:flex;gap:8px;align-items:center;margin-top:12px}
+.cherche input{flex:1;font-size:16px;padding:12px;border-radius:10px;border:2px solid var(--line);background:var(--surface);color:var(--fg)}
+.cherche input:focus{border-color:var(--green);outline:none}
 .phs.grand{display:grid;gap:8px}
 .phadd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
 .phs.petit{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
