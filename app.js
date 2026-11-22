@@ -369,8 +369,9 @@ function renderProgramme() {
   const reste = equipe.reduce((n, s) => n + tachesDe(s.id, hier).filter(aReprendre).length, 0);
   let html = dateTabs(true) + equipeTabs() + errBox();
   html += `<div class="row" style="margin-top:12px">
-    <button class="btn ghost small" data-act="reprendre" ${reste ? "" : "disabled"}>Reprendre ${reste ? "les " + reste + " tâches" : "les tâches"} non faites la veille</button>
-    <button class="btn ghost small" data-act="copier">Copier le programme de la veille</button></div>`;
+    <button class="btn ghost small" data-act="reprendre">Reprendre ${reste ? "les " + reste + " tâches" : "les tâches"} non faites du ${longDate(hier)}</button>
+    <button class="btn ghost small" data-act="copier">Copier le programme du ${longDate(hier)}</button></div>
+    <p class="muted" style="margin:6px 0 0">Elles seront ajoutées au ${longDate(U.date)} (${U.equipe === "jardin" ? "Jardin" : "Golf"}).</p>`;
   html += rechercheBox();
   html += `<div class="stack" style="margin-top:14px">`;
   secs.forEach(s => {
@@ -653,7 +654,21 @@ document.addEventListener("click", async e => {
           A === "reprendre" ? { report_de: t.id } : { copie_de: t.id }, ph.length ? { photos: ph } : {})));
       });
     });
-    if (!n) alert("Rien à ajouter : ces tâches sont déjà au programme.");
+    if (!n) {
+      // Explique pourquoi rien n'est ajouté, au lieu d'un bouton gris sans explication.
+      const eq = U.equipe === "jardin" ? "Jardin" : "Golf", veille = S.secteurs.filter(s => s.equipe === U.equipe).flatMap(s => tachesDe(s.id, hier));
+      const demain = shift(U.date, 1);
+      let msg;
+      if (!veille.length) msg = "Aucune tâche n’était programmée le " + longDate(hier) + " (" + eq + ").";
+      else if (A === "reprendre" && !veille.some(aReprendre)) msg = veille.some(t => reporte(t) || t.reporte_vers)
+        ? "Les tâches non faites du " + longDate(hier) + " ont déjà été reprises (" + eq + ")."
+        : "Toutes les tâches du " + longDate(hier) + " sont faites (" + eq + ") : rien à reprendre.";
+      else msg = "Rien à ajouter : ces tâches sont déjà au programme du " + longDate(U.date) + ".";
+      const ici = S.secteurs.filter(s => s.equipe === U.equipe).flatMap(s => tachesDe(s.id, U.date)).filter(aReprendre).length;
+      if (A === "reprendre" && ici)
+        msg += "\n\nLe " + longDate(U.date) + " a " + ici + " tâche" + (ici > 1 ? "s" : "") + " non faite" + (ici > 1 ? "s" : "") + ". Pour les reprendre, affiche d’abord le jour où tu veux les mettre (« " + rel(demain) + " » en haut), puis appuie sur ce bouton.";
+      alert(msg);
+    }
     return;
   }
   if (A === "bchip") {
