@@ -426,16 +426,16 @@ function statsProd(periode) {
   });
   return { tot, liste: Object.values(parNom) };
 }
-const tauxDe = x => { const d = x.faites + x.pasfaites + x.nonval; return d ? Math.round(x.faites / d * 100) : null; };
+const tauxDe = x => x.prog ? Math.round(x.faites / x.prog * 100) : null;
 function barreProd(x) {
-  const d = x.faites + x.pasfaites + x.nonval || 1, w = v => (v / d * 100).toFixed(1) + "%";
+  const d = x.prog || 1, w = v => (v / d * 100).toFixed(1) + "%";
   return `<div class="pbar" aria-hidden="true"><i class="b-done" style="width:${w(x.faites)}"></i><i class="b-ko" style="width:${w(x.pasfaites)}"></i><i class="b-todo" style="width:${w(x.nonval)}"></i></div>`;
 }
 function detailProd(x) {
   const parts = [`<span class="c-done">${x.faites} fait${x.faites > 1 ? "es" : "e"}</span>`];
   if (x.pasfaites) parts.push(`<span class="c-ko">${x.pasfaites} pas faite${x.pasfaites > 1 ? "s" : ""}</span>`);
   if (x.nonval) parts.push(`<span class="c-todo">${x.nonval} non validée${x.nonval > 1 ? "s" : ""}</span>`);
-  if (x.encours) parts.push(`${x.encours} en cours aujourd’hui`);
+  if (x.encours) parts.push(`${x.encours} à faire aujourd’hui`);
   return parts.join(" · ") + ` <span class="muted">sur ${x.prog} programmée${x.prog > 1 ? "s" : ""}</span>`;
 }
 function renderProductivite() {
@@ -463,7 +463,7 @@ function renderProductivite() {
         <ul class="raisons">${x.raisons.sort((a, b) => b.date.localeCompare(a.date)).map(r => `<li><strong>${h(rel(r.date))}</strong> · ${h(r.act)} : ${r.rq ? h(r.rq) : '<span class="muted">pas de raison donnée</span>'}</li>`).join("")}</ul></details>` : ""}
     </div>`;
   });
-  html += `</div><p class="muted" style="margin-top:14px">Le taux compte les tâches « fait » sur les tâches des jours passés (faites, pas faites ou non validées). Les tâches d’aujourd’hui encore à faire, les tâches annulées et reportées ne comptent pas. Une tâche « Tout le secteur » compte pour chaque jardinier du secteur. Une tâche « pas fait » peut avoir une bonne raison (pluie, panne) : regarde les raisons avant de juger.</p>`;
+  html += `</div><p class="muted" style="margin-top:14px">Le pourcentage = tâches « fait » sur toutes les tâches programmées de la période, y compris celles d’aujourd’hui pas encore validées (il monte au fil de la journée). Les tâches annulées et reportées ne comptent pas. Une tâche « Tout le secteur » compte pour chaque jardinier du secteur. Une tâche « pas fait » peut avoir une bonne raison (pluie, panne) : regarde les raisons avant de juger.</p>`;
   main.innerHTML = html;
 }
 
