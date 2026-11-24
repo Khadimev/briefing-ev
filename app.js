@@ -279,6 +279,9 @@ function renderTaches() {
   if (!U.sect || !secteur(U.sect)) U.sect = mes[0] && mes[0].id;
   const s = secteur(U.sect);
   if (!s) { main.innerHTML = `<p class="notice" style="margin-top:16px">Aucun secteur sur ce téléphone. Entre un code dans Réglages.</p>`; return; }
+  // Un seul jardinier dans le secteur : son nom est choisi automatiquement.
+  const noms = s.jardiniers || [];
+  if (!S.moi[s.id] && noms.length === 1) { S.moi[s.id] = noms[0]; save("moi"); }
   const moi = S.moi[s.id];
   const list = tachesDe(s.id, U.date);
   const done = list.filter(fait).length;
@@ -286,9 +289,10 @@ function renderTaches() {
   if (mes.length > 1) html += `<div class="chips" style="margin-top:14px">${mes.map(x => `<button class="chip" data-act="sect" data-s="${x.id}" aria-pressed="${x.id === s.id}">${h(x.nom)}</button>`).join("")}</div>`;
   html += dateTabs(false) + errBox();
   html += `<div class="card" style="margin-top:14px"><div class="sect"><span class="name">${h(s.nom)}</span>${list.length ? `<span class="count">${done}/${list.length}</span>` : ""}</div>`;
-  if (!moi) {
-    html += `<label class="lbl">Qui es-tu ? Choisis ton nom une seule fois.</label><div class="chips">${s.jardiniers.map(n => `<button class="chip" data-act="moi" data-n="${h(n)}">${h(affNom(n))}</button>`).join("")}</div>`;
-  } else {
+  if (!moi && noms.length) {
+    html += `<div class="notice quiestu" id="quiestu" style="margin-top:10px"><strong>👤 Qui es-tu ?</strong> Appuie sur ton nom une seule fois. Ensuite tu pourras valider tes tâches.
+      <div class="chips" style="margin-top:8px">${noms.map(n => `<button class="chip" data-act="moi" data-n="${h(n)}">${h(affNom(n))}</button>`).join("")}</div></div>`;
+  } else if (moi) {
     html += `<div class="who">Je suis ${h(affNom(moi))} <button class="link" data-act="moi" data-n="">Changer</button></div>`;
   }
   if (!list.length) html += `<p class="muted" style="margin-bottom:0">${S.synchro ? "Aucune tâche programmée pour ce jour." : "Les tâches arriveront dès que le téléphone aura du réseau."}</p>`;
@@ -305,7 +309,7 @@ function renderTaches() {
       html += `<div class="row"><div class="choix">
           <span class="ch ${fait(t) ? "on-done" : "off"}" aria-hidden="${fait(t) ? "false" : "true"}">${fait(t) ? "☑" : "☐"} Fait</span>
           <span class="ch ${pasFait(t) ? "on-ko" : "off"}" aria-hidden="${pasFait(t) ? "false" : "true"}">${pasFait(t) ? "☒" : "☐"} Pas fait</span></div>
-        <button class="btn ghost small" data-act="annuler" data-id="${t.id}" ${moi ? "" : "disabled"}>Modifier</button></div>
+        <button class="btn ghost small" data-act="annuler" data-id="${t.id}">Modifier</button></div>
         <div class="state ${fait(t) ? "done" : "nf"}">${fait(t) ? "✓ Fait" : "✗ Pas fait"}${t.fait_par ? " par " + h(affNom(t.fait_par)) : ""}${t.fait_le ? ", " + quand(t.fait_le) : ""}</div>
         ${t.remarque ? `<div class="muted">Remarque : ${h(t.remarque)}</div>` : ""}`;
     } else if (U.ko === t.id) {
@@ -313,8 +317,8 @@ function renderTaches() {
         <div class="row" style="margin-top:8px"><button class="btn clay small" data-act="pasfait" data-id="${t.id}">Enregistrer « pas fait »</button><button class="btn ghost small" data-act="ko" data-id="">Annuler</button></div>`;
     } else {
       html += `<div class="row"><span class="badge todo">À faire</span></div>
-        <div class="row"><button class="btn coche fait" style="flex:2" data-act="fait" data-id="${t.id}" ${moi ? "" : "disabled"}>☐ C’est fait</button>
-        <button class="btn coche pasfait" style="flex:1" data-act="ko" data-id="${t.id}" ${moi ? "" : "disabled"}>☐ Pas fait</button></div>`;
+        <div class="row"><button class="btn coche fait" style="flex:2" data-act="fait" data-id="${t.id}">☐ C’est fait</button>
+        <button class="btn coche pasfait" style="flex:1" data-act="ko" data-id="${t.id}">☐ Pas fait</button></div>`;
     }
     html += `</div>`;
   });
@@ -608,6 +612,16 @@ document.addEventListener("click", async e => {
   if (A === "chercheVider") { U.cherche = ""; const c = document.getElementById("cherche"); if (c) { c.value = ""; c.focus(); } appliquerRecherche(); return; }
   if (A === "sect") { U.sect = d.s; U.add = null; U.ko = null; return render(); }
   if (A === "moi") { if (d.n) S.moi[U.sect] = d.n; else delete S.moi[U.sect]; save("moi"); return render(); }
+  // Le jardinier doit d'abord dire qui il est (secteur à plusieurs jardiniers) : on le lui explique au lieu d'un bouton bloqué.
+  if ((A === "fait" || A === "pasfait" || A === "ko" || A === "annuler") && d.id && S.taches[d.id] && S.role !== "admin") {
+    const sid = S.taches[d.id].secteur, sec = secteur(sid);
+    if (!S.moi[sid] && sec && (sec.jardiniers || []).length > 1) {
+      const q = document.getElementById("quiestu");
+      if (q) { q.scrollIntoView({ behavior: "smooth", block: "center" }); q.classList.remove("clignote"); void q.offsetWidth; q.classList.add("clignote"); }
+      alert("Appuie d’abord sur ton nom, en haut (« Qui es-tu ? »). Ensuite tu pourras valider.");
+      return;
+    }
+  }
   if (A === "fait" || A === "pasfait") {
     const t = Object.assign({}, S.taches[d.id]);
     t.statut = A === "fait" ? "fait" : "pas fait"; t.fait_par = S.moi[t.secteur] || ""; t.fait_le = new Date().toISOString();
@@ -942,6 +956,9 @@ document.head.insertAdjacentHTML("beforeend", `<style>
 .cherche{display:flex;gap:8px;align-items:center;margin-top:12px}
 .cherche input{flex:1;font-size:16px;padding:12px;border-radius:10px;border:2px solid var(--line);background:var(--surface);color:var(--fg)}
 .cherche input:focus{border-color:var(--green);outline:none}
+.quiestu{border:2px solid var(--green);font-size:15px}
+.quiestu.clignote{animation:clig 1s ease 2}
+@keyframes clig{50%{background:var(--todo-soft)}}
 .phs.grand{display:grid;gap:8px}
 .phadd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
 .phs.petit{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
